@@ -37,6 +37,54 @@ func main() {
 	)
 	helpers.FailOnError(err, "Failed to declare a exchange")
 
+
+	tuiQueue, err := ch.QueueDeclare(
+		"",    // name
+		false, // durability
+		false, // delete when unused
+		true,  // exclusive
+		false, // no-wait
+		nil,
+	)
+	helpers.FailOnError(err, "Failed to declare a queue")
+
+	err = ch.QueueBind(
+		tuiQueue.Name,      // queue
+		events.PaymentEventApproved.String(), // routing
+		ecommerceExchange.Name,     // exchange
+		false,           // no-wait
+		nil,             // arguments
+	)
+	helpers.FailOnError(err, "Failed to bind a queue")
+
+	err = ch.QueueBind(
+		tuiQueue.Name,      // queue
+		events.StockEventUnavailable.String(), // routing
+		ecommerceExchange.Name,     // exchange
+		false,           // no-wait
+		nil,             // arguments
+	)
+	helpers.FailOnError(err, "Failed to bind a queue")
+
+	msgs, err := ch.Consume(
+		tuiQueue.Name, // queue
+		"",         // consumer
+		true,       // auto-ack
+		false,      // exclusive
+		false,      // no-local
+		false,      // no-wait
+		nil,        // args
+	)
+	helpers.FailOnError(err, "Failed to register a consumer")
+
+	var forever chan struct{}
+
+	go func() {
+		for d := range msgs {
+			log.Printf("Received a message: %s", d.Body)
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -52,4 +100,5 @@ func main() {
 		})
 	helpers.FailOnError(err, "Failed to publish a message")
 	log.Printf(" [x] Sent %s\n", body)
+	<-forever
 }

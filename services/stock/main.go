@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+	"eCommerce/pkg/events"
+	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -26,12 +30,14 @@ func main() {
 	)
 	helpers.FailOnError(err, "Failed to declare a queue")
 
+	var ecommerceExchange = exchanges.GetEcommerceExchangeInfo()
+
 	err = ch.QueueBind(
-		queue.Name,      // queue
-		"pedido.criado", // routing
-		"eCommerce",     // exchange
-		false,           // no-wait
-		nil,             // arguments
+		queue.Name,                        // queue
+		events.OrderEventCreated.String(), // routing
+		ecommerceExchange.Name,            // exchange
+		false,                             // no-wait
+		nil,                               // arguments
 	)
 	helpers.FailOnError(err, "Failed to bind a queue")
 
@@ -51,6 +57,21 @@ func main() {
 	go func() {
 		for d := range msgs {
 			log.Printf("Received a message: %s", d.Body)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			body := "Stock Unavailable!"
+			err = ch.PublishWithContext(ctx,
+				ecommerceExchange.Name,                // exchange
+				events.StockEventUnavailable.String(), // routing key
+				false,                                 // mandatory
+				false,                                 // immediate
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        []byte(body),
+				})
+			helpers.FailOnError(err, "Failed to publish a message")
+			log.Printf(" [x] Sent %s\n", body)
 		}
 	}()
 
