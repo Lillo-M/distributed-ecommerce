@@ -6,6 +6,10 @@ import (
 
 func FailOnError(err error, msg string) {
 	if err != nil {
-		log.Panicf("%s: %s", msg, err)
+		LogErrorMessage(err, msg)
 	}
+}
+
+func LogErrorMessage(err error, msg string) {
+	log.Panicf("%s: %s", msg, err)
 }

@@ -2,19 +2,19 @@ package exchanges
 
 type exchangeInfo struct {
 	Name         string
-	ExchangeType string
+	Type string
 }
 
 func GetEcommerceExchangeInfo() exchangeInfo {
 	return exchangeInfo{
 		Name:         "eCommerce",
-		ExchangeType: "direct",
+		Type: "direct",
 	}
 }
 
 func GetSalesExchangeInfo() exchangeInfo {
 	return exchangeInfo{
 		Name:         "sales",
-		ExchangeType: "topic",
+		Type: "topic",
 	}
 }
