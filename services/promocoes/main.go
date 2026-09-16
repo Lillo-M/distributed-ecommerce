@@ -1,0 +1,57 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"math/rand"
+	"time"
+
+	"eCommerce/pkg/config"
+	"eCommerce/pkg/events"
+	"eCommerce/pkg/exchanges"
+	"eCommerce/pkg/helpers"
+
+	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+	cfg, err := config.Load()
+	helpers.FailOnError(err, "Erro de config")
+
+	conn, err := amqp.Dial(cfg.RabbitMQURL)
+	helpers.FailOnError(err, "Erro na conexão")
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	helpers.FailOnError(err, "Erro no canal")
+	defer ch.Close()
+
+	salesEx := exchanges.GetSalesExchangeInfo()
+	_ = ch.ExchangeDeclare(salesEx.Name, salesEx.Type, false, false, false, false, nil)
+
+	cats := []string{"A", "B", "C"}
+
+	for {
+		cat := cats[rand.Intn(len(cats))]
+		routingKey := fmt.Sprintf("promocao.categoria.%s", cat)
+
+		promo := events.PromoPayload{
+			ID:        fmt.Sprintf("%d", rand.Intn(1000)),
+			Categoria: cat,
+			Produto:   fmt.Sprintf("Produto Exemplo %s", cat),
+			Desconto:  float64(rand.Intn(50) + 10),
+		}
+
+		body, _ := json.Marshal(promo)
+
+		_ = ch.Publish(salesEx.Name, routingKey, false, false, amqp.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		})
+
+		log.Printf("[Promoções] Publicada oferta na key '%s'", routingKey)
+		time.Sleep(5 * time.Second)
+	}
+}
