@@ -1,14 +1,24 @@
 package main
 
-import "eCommerce/pkg/helpers"
+import (
+	"fmt"
+	"log"
+	"os"
+)
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("Erro: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	tui, err := CreateTUI()
-	helpers.FailOnError(err, "Failed to create TUI")
+	if err != nil {
+		return fmt.Errorf("iniciar interface: %w", err)
+	}
 	defer tui.DestroyTUI()
 
-	var forever chan int
-
-	tui.TestSend("Hello, World!")
-	<-forever
+	return RunMenu(os.Stdin, os.Stdout, tui.Callbacks())
 }
