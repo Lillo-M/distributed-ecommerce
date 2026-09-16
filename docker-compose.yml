@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  stock:
+    image: golang:alpine
+    container_name: ms-stock
+    restart: on-failure
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/stock/main.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  pagamentos:
+    image: golang:alpine
+    container_name: ms-pagamentos
+    restart: on-failure
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/pagamentos/main.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  entrega:
+    image: golang:alpine
+    container_name: ms-entrega
+    restart: on-failure
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/entrega/main.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  promocoes:
+    image: golang:alpine
+    container_name: ms-promocoes
+    restart: on-failure
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/promocoes/main.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  c1:
+    image: golang:alpine
+    container_name: ms-c1
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/consumidores/c1.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  c2:
+    image: golang:alpine
+    container_name: ms-c2
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    command: go run services/consumidores/c2.go
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
