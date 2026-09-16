@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
 	"eCommerce/pkg/config"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
-	"eCommerce/pkg/helpers"
 	"fmt"
 	"log"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -19,6 +16,7 @@ type TerminalUserInterface struct {
 	Channel    *amqp.Channel
 	Queue      amqp.Queue
 	Messages   <-chan amqp.Delivery
+	publisher  messagePublisher
 }
 
 func (tui *TerminalUserInterface) DestroyTUI() {
@@ -35,22 +33,20 @@ func CreateTUI() (*TerminalUserInterface, error) {
 	var err error
 	tui.Config, err = config.Load()
 	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to load configuration")
-		return nil, err
+		return nil, fmt.Errorf("carregar configuração: %w", err)
 	}
 
 	tui.Connection, err = amqp.Dial(tui.Config.RabbitMQURL)
 	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to connect to RabbitMQ")
-		return nil, err
+		return nil, fmt.Errorf("conectar ao RabbitMQ: %w", err)
 	}
 
 	tui.Channel, err = tui.Connection.Channel()
 	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to open a channel")
 		tui.Connection.Close()
-		return nil, err
+		return nil, fmt.Errorf("abrir canal: %w", err)
 	}
+	tui.publisher = tui.Channel
 
 	var ecommerceExchange = exchanges.GetEcommerceExchangeInfo()
 	err = tui.Channel.ExchangeDeclare(
@@ -63,9 +59,8 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		nil,                    // arguments
 	)
 	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to declare a exchange")
 		tui.DestroyTUI()
-		return nil, err
+		return nil, fmt.Errorf("declarar exchange: %w", err)
 	}
 
 	tui.Queue, err = tui.Channel.QueueDeclare(
@@ -77,9 +72,8 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		nil,
 	)
 	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to declare a queue")
 		tui.DestroyTUI()
-		return nil, err
+		return nil, fmt.Errorf("declarar fila: %w", err)
 	}
 
 	routingKeys := []string{
@@ -94,9 +88,8 @@ func CreateTUI() (*TerminalUserInterface, error) {
 			false,                  // no-wait
 			nil,                    // arguments
 		); err != nil {
-			helpers.LogErrorMessage(err, fmt.Sprintf("Failed to bind queue '%s' to key '%s'", tui.Queue.Name, key))
 			tui.DestroyTUI()
-			return nil, err
+			return nil, fmt.Errorf("associar fila %q ao evento %q: %w", tui.Queue.Name, key, err)
 		}
 	}
 
@@ -110,37 +103,17 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		nil,            // args
 	)
 	if err != nil {
-		helpers.LogErrorMessage(err,
-			fmt.Sprintf("Failed to register a consumer to queue '%v'",
-				tui.Queue.Name))
 		tui.DestroyTUI()
-		return nil, err
+		return nil, fmt.Errorf("registrar consumidor na fila %q: %w", tui.Queue.Name, err)
 	}
 
 	go tui.handleMessage()
 
-	return tui, err
+	return tui, nil
 }
 
 func (tui *TerminalUserInterface) handleMessage() {
 	for message := range tui.Messages {
 		log.Printf("Received a message: %s", message.Body)
 	}
-}
-
-func (tui *TerminalUserInterface) TestSend(body string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var err = tui.Channel.PublishWithContext(ctx,
-		exchanges.GetEcommerceExchangeInfo().Name, // exchange
-		events.OrderEventCreated.String(),         // routing key
-		false,                                     // mandatory
-		false,                                     // immediate
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(body),
-		})
-	helpers.FailOnError(err, "Failed to publish a message")
-	log.Printf(" [x] Sent %s\n", body)
 }
