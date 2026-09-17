@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -102,6 +103,10 @@ func VerifyMessage(delivery amqp.Delivery, pubKey *rsa.PublicKey) error {
 func GetProducerPublicKey(message amqp.Delivery) (*rsa.PublicKey, error) {
 	var producerKey *rsa.PublicKey
 	var err error
+	if strings.HasPrefix(message.RoutingKey, "promocao") {
+		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/promotions.pem")
+		return producerKey, err
+	}
 	switch message.RoutingKey {
 	case events.PaymentEventApproved.String():
 		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/payments.pem")
