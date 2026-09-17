@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -44,12 +47,22 @@ func (tui *TerminalUserInterface) listProducts(ctx context.Context) ([]events.Pr
 	if _, err := rand.Read(identifier); err != nil {
 		return nil, fmt.Errorf("identificar consulta: %w", err)
 	}
+
 	correlationID := hex.EncodeToString(identifier)
+
+	checksum := sha256.Sum256(identifier)
+
+	signature, err := rsa.SignPSS(rand.Reader, tui.privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		fmt.Printf("preparar assinatura: %v", err)
+	}
+
 	if err := ch.PublishWithContext(ctx, exchange, events.RoutingProdutosConsultar, false, false, amqp.Publishing{
 		ContentType:   "application/json",
+		Headers:       amqp.Table{"x-signature": signature},
 		ReplyTo:       replyKey,
 		CorrelationId: correlationID,
-		Body:          []byte(`{}`),
+		Body:          identifier,
 	}); err != nil {
 		return nil, fmt.Errorf("consultar produtos: %w", err)
 	}

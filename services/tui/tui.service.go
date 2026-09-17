@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/rsa"
 	"eCommerce/pkg/config"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
+	"eCommerce/pkg/helpers"
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -21,6 +24,7 @@ type TerminalUserInterface struct {
 	publisher  messagePublisher
 	ordersMu   sync.Mutex
 	orders     map[string]sessionOrder
+	privateKey *rsa.PrivateKey
 }
 
 // Os itens são mantidos para publicar a exclusão no contrato esperado pelo Estoque.
@@ -44,6 +48,11 @@ func CreateTUI() (*TerminalUserInterface, error) {
 	tui.Config, err = config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("carregar configuração: %w", err)
+	}
+
+	tui.privateKey, err = helpers.ReadPrivateKeyPEM("./pkg/private-keys/main.pem")
+	if err != nil {
+		return nil, fmt.Errorf("carregar chave privada: %w", err)
 	}
 
 	tui.Connection, err = amqp.Dial(tui.Config.RabbitMQURL)
@@ -119,6 +128,19 @@ func CreateTUI() (*TerminalUserInterface, error) {
 
 func (tui *TerminalUserInterface) handleMessage() {
 	for message := range tui.Messages {
+
+		producerKey, err := helpers.GetProducerPublicKey(message)
+		if err != nil {
+			log.Printf("Erro ao ler chave publica do producer de %v: %v", message.RoutingKey, err)
+			continue
+		}
+
+		err = helpers.VerifyMessage(message, producerKey)
+		if err != nil {
+			log.Printf("Falha ao validar assinatura do producer do evento %v: %v", message.RoutingKey, err)
+			continue
+		}
+
 		var payload events.PedidoPayload
 		if err := json.Unmarshal(message.Body, &payload); err != nil {
 			log.Printf("Evento %s inválido: %v", message.RoutingKey, err)
@@ -127,6 +149,10 @@ func (tui *TerminalUserInterface) handleMessage() {
 
 		if status, changed := tui.updateOrderStatus(payload.ID, message.RoutingKey); changed {
 			log.Printf("Pedido %s atualizado: %s", payload.ID, status)
+		}
+
+		if slices.Contains([]string{events.PaymentEventRefused.String(), events.StockEventUnavailable.String()}, message.RoutingKey) {
+			tui.publishOrderEvent(events.OrderEventDeleted, payload)
 		}
 	}
 }

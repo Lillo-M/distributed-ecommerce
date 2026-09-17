@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"log"
 	"os"
@@ -66,9 +70,21 @@ func main() {
 
 	log.Println("[Estoque] Serviço pronto e aguardando eventos...")
 
-	for d := range msgs {
-		if d.RoutingKey == events.RoutingProdutosConsultar {
-			if !strings.HasPrefix(d.ReplyTo, events.RoutingProdutosListados+".") || d.CorrelationId == "" {
+	for message := range msgs {
+		producerKey, err := helpers.GetProducerPublicKey(message)
+		if err != nil {
+			log.Printf("Erro ao ler chave publica do producer de %v: %v", message.RoutingKey, err)
+			continue
+		}
+
+		err = helpers.VerifyMessage(message, producerKey)
+		if err != nil {
+			log.Printf("Falha ao validar assinatura do producer do evento %v: %v", message.RoutingKey, err)
+			continue
+		}
+
+		if message.RoutingKey == events.RoutingProdutosConsultar {
+			if !strings.HasPrefix(message.ReplyTo, events.RoutingProdutosListados+".") || message.CorrelationId == "" {
 				log.Println("[Estoque] Consulta de produtos sem destino de resposta válido")
 				continue
 			}
@@ -76,9 +92,9 @@ func main() {
 			body, err := json.Marshal(events.ProductsPayload{Products: products})
 			mu.Unlock()
 			if err == nil {
-				err = ch.Publish(ecommerceEx.Name, d.ReplyTo, false, false, amqp.Publishing{
+				err = ch.Publish(ecommerceEx.Name, message.ReplyTo, false, false, amqp.Publishing{
 					ContentType:   "application/json",
-					CorrelationId: d.CorrelationId,
+					CorrelationId: message.CorrelationId,
 					Body:          body,
 				})
 			}
@@ -89,12 +105,12 @@ func main() {
 		}
 
 		var p events.PedidoPayload
-		if err := json.Unmarshal(d.Body, &p); err != nil {
+		if err := json.Unmarshal(message.Body, &p); err != nil {
 			continue
 		}
 
 		mu.Lock()
-		if d.RoutingKey == events.RoutingPedidoCriado {
+		if message.RoutingKey == events.RoutingPedidoCriado {
 			available := true
 			for _, item := range p.Itens {
 				found := false
@@ -125,7 +141,7 @@ func main() {
 				log.Printf("[Estoque] Pedido %s - Estoque Indisponível", p.ID)
 				publishEvent(ch, ecommerceEx.Name, events.RoutingEstoqueIndisponivel, p)
 			}
-		} else if d.RoutingKey == events.RoutingPedidoExcluido {
+		} else if message.RoutingKey == events.RoutingPedidoExcluido {
 			for _, item := range p.Itens {
 				for i := range products {
 					if products[i].UUID == item.ProductID {
@@ -140,10 +156,27 @@ func main() {
 	}
 }
 
-func publishEvent(ch *amqp.Channel, exchange, rkey string, payload interface{}) {
-	body, _ := json.Marshal(payload)
+func publishEvent(ch *amqp.Channel, exchange, rkey string, payload events.PedidoPayload) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Fatalf("Erro ao serializar payload: %v", err)
+	}
+
+	privateKey, err := helpers.ReadPrivateKeyPEM("./pkg/private-keys/stock.pem")
+	if err != nil {
+		log.Fatalf("Erro ao ler chave privada: %v", err)
+	}
+
+	checksum := sha256.Sum256(body)
+
+	signature, err := rsa.SignPSS(rand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("preparar assinatura: %v", err)
+	}
+
 	_ = ch.Publish(exchange, rkey, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Headers:     amqp.Table{"x-signature": signature},
 		Body:        body,
 	})
 }

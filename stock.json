@@ -3,13 +3,13 @@
     "uuid": "e3a89304-4c28-4e89-9a74-d021c3258bd2",
     "name": "NVIDIA GeForce RTX 4080 Super",
     "price": 999.99,
-    "quantity": 3
+    "quantity": 5
   },
   {
     "uuid": "8f3b2110-63e5-4b1a-8c92-3112d8a4f910",
     "name": "AMD Ryzen 7 7800X3D Processor",
     "price": 389,
-    "quantity": 8
+    "quantity": 2
   },
   {
     "uuid": "1d59f7c2-9e32-4d04-a16f-bc7291a1829e",
@@ -21,7 +21,7 @@
     "uuid": "7c9e0a12-25b4-4e12-8802-f38101a09d43",
     "name": "Corsair Vengeance DDR5 RAM 32GB (2x16GB)",
     "price": 114.99,
-    "quantity": 10
+    "quantity": 0
   },
   {
     "uuid": "a248f108-9d32-4113-bf11-e612849b2c34",

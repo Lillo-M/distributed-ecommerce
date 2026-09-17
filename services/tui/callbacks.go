@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"encoding/json"
@@ -89,9 +93,17 @@ func (tui *TerminalUserInterface) publishOrderEvent(event events.OrderEvent, pay
 	if tui.publisher == nil {
 		return fmt.Errorf("conexão de publicação indisponível")
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("preparar solicitação: %w", err)
+	}
+
+	checksum := sha256.Sum256(body)
+
+	signature, err := rsa.SignPSS(rand.Reader, tui.privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		return fmt.Errorf("preparar assinatura: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -100,7 +112,11 @@ func (tui *TerminalUserInterface) publishOrderEvent(event events.OrderEvent, pay
 		event.String(),
 		false,
 		false,
-		amqp.Publishing{ContentType: "application/json", Body: body},
+		amqp.Publishing{
+			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
+			Body:        body,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("enviar solicitação: %w", err)

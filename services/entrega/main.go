@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"log"
 
@@ -39,9 +43,20 @@ func main() {
 
 	log.Println("[Entrega] Serviço aguardando novos pagamentos...")
 
-	for d := range msgs {
+	for message := range msgs {
+		producerKey, err := helpers.GetProducerPublicKey(message)
+		if err != nil {
+			log.Printf("Erro ao ler chave publica do producer de %v: %v", message.RoutingKey, err)
+			continue
+		}
+
+		err = helpers.VerifyMessage(message, producerKey)
+		if err != nil {
+			log.Printf("Falha ao validar assinatura do producer do evento %v: %v", message.RoutingKey, err)
+			continue
+		}
 		var p events.PedidoPayload
-		if err := json.Unmarshal(d.Body, &p); err != nil {
+		if err := json.Unmarshal(message.Body, &p); err != nil {
 			continue
 		}
 
@@ -52,8 +67,21 @@ func main() {
 
 func publishEvent(ch *amqp.Channel, exchange, rkey string, payload interface{}) {
 	body, _ := json.Marshal(payload)
+	privateKey, err := helpers.ReadPrivateKeyPEM("./pkg/private-keys/delivery.pem")
+	if err != nil {
+		log.Fatalf("Erro ao ler chave privada: %v", err)
+	}
+
+	checksum := sha256.Sum256(body)
+
+	signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("preparar assinatura: %v", err)
+	}
+
 	_ = ch.Publish(exchange, rkey, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Headers:     amqp.Table{"x-signature": signature},
 		Body:        body,
 	})
 }

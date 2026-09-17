@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,7 +20,7 @@ import (
 )
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
+	rand.NewSource(0)
 	cfg, err := config.Load()
 	helpers.FailOnError(err, "Erro de config")
 
@@ -47,8 +51,21 @@ func main() {
 
 		body, _ := json.Marshal(promo)
 
+		privateKey, err := helpers.ReadPrivateKeyPEM("./pkg/private-keys/stock.pem")
+		if err != nil {
+			log.Fatalf("Erro ao ler chave privada: %v", err)
+		}
+
+		checksum := sha256.Sum256(body)
+
+		signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+		if err != nil {
+			log.Fatalf("preparar assinatura: %v", err)
+		}
+
 		_ = ch.Publish(salesEx.Name, routingKey, false, false, amqp.Publishing{
 			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
 			Body:        body,
 		})
 

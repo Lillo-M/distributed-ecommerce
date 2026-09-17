@@ -37,9 +37,20 @@ func main() {
 	helpers.FailOnError(err, "[C1] Erro ao consumir promoções")
 	log.Println("[Consumidor C1] Escutando categorias A e B...")
 
-	for d := range msgs {
+	for message := range msgs {
+		producerKey, err := helpers.GetProducerPublicKey(message)
+		if err != nil {
+			log.Printf("Erro ao ler chave publica do producer de %v: %v", message.RoutingKey, err)
+			continue
+		}
+
+		err = helpers.VerifyMessage(message, producerKey)
+		if err != nil {
+			log.Printf("Falha ao validar assinatura do producer do evento %v: %v", message.RoutingKey, err)
+			continue
+		}
 		var p events.PromoPayload
-		if err := json.Unmarshal(d.Body, &p); err == nil {
+		if err := json.Unmarshal(message.Body, &p); err == nil {
 			log.Printf("[C1] Promoção recebida: Cat %s | Desc: %.0f%%", p.Categoria, p.Desconto)
 		}
 	}
