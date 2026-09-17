@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"eCommerce/pkg/config"
@@ -14,12 +15,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type Product struct {
-	UUID     string  `json:"uuid"`
-	Name     string  `json:"name"`
-	Price    float64 `json:"price"`
-	Quantity int     `json:"quantity"`
-}
+type Product = events.Product
 
 var (
 	stockFile = "stock.json"
@@ -59,6 +55,8 @@ func main() {
 
 	_ = ch.QueueBind(q.Name, events.RoutingPedidoCriado, ecommerceEx.Name, false, nil)
 	_ = ch.QueueBind(q.Name, events.RoutingPedidoExcluido, ecommerceEx.Name, false, nil)
+	err = ch.QueueBind(q.Name, events.RoutingProdutosConsultar, ecommerceEx.Name, false, nil)
+	helpers.FailOnError(err, "Erro ao associar consulta de produtos")
 
 	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	helpers.FailOnError(err, "Erro no consume")
@@ -66,6 +64,27 @@ func main() {
 	log.Println("[Estoque] Serviço pronto e aguardando eventos...")
 
 	for d := range msgs {
+		if d.RoutingKey == events.RoutingProdutosConsultar {
+			if !strings.HasPrefix(d.ReplyTo, events.RoutingProdutosListados+".") || d.CorrelationId == "" {
+				log.Println("[Estoque] Consulta de produtos sem destino de resposta válido")
+				continue
+			}
+			mu.Lock()
+			body, err := json.Marshal(events.ProductsPayload{Products: products})
+			mu.Unlock()
+			if err == nil {
+				err = ch.Publish(ecommerceEx.Name, d.ReplyTo, false, false, amqp.Publishing{
+					ContentType:   "application/json",
+					CorrelationId: d.CorrelationId,
+					Body:          body,
+				})
+			}
+			if err != nil {
+				log.Printf("[Estoque] Erro ao responder consulta de produtos: %v", err)
+			}
+			continue
+		}
+
 		var p events.PedidoPayload
 		if err := json.Unmarshal(d.Body, &p); err != nil {
 			continue

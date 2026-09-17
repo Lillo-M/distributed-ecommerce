@@ -4,8 +4,10 @@ import (
 	"eCommerce/pkg/config"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -17,6 +19,15 @@ type TerminalUserInterface struct {
 	Queue      amqp.Queue
 	Messages   <-chan amqp.Delivery
 	publisher  messagePublisher
+	ordersMu   sync.Mutex
+	orders     map[string]sessionOrder
+}
+
+// Os itens são mantidos para publicar a exclusão no contrato esperado pelo Estoque.
+type sessionOrder struct {
+	customerID string
+	payload    events.PedidoPayload
+	closed     bool
 }
 
 func (tui *TerminalUserInterface) DestroyTUI() {
@@ -78,6 +89,9 @@ func CreateTUI() (*TerminalUserInterface, error) {
 
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
+		events.PaymentEventRefused.String(),
+		events.OrderEventSent.String(),
+		events.OrderEventStockOk.String(),
 		events.StockEventUnavailable.String(),
 	}
 	for _, key := range routingKeys {
@@ -114,6 +128,23 @@ func CreateTUI() (*TerminalUserInterface, error) {
 
 func (tui *TerminalUserInterface) handleMessage() {
 	for message := range tui.Messages {
-		log.Printf("Received a message: %s", message.Body)
+		var payload events.PedidoPayload
+		if err := json.Unmarshal(message.Body, &payload); err != nil {
+			log.Printf("Evento %s inválido: %v", message.RoutingKey, err)
+			continue
+		}
+
+		// Evita estornar novamente pedidos recusados ou cancelar pedidos já pagos.
+		switch message.RoutingKey {
+		case events.RoutingPagamentoAprovado, events.RoutingPagamentoRecusado,
+			events.RoutingPedidoEnviado, events.RoutingEstoqueIndisponivel:
+			tui.ordersMu.Lock()
+			if order, ok := tui.orders[payload.ID]; ok {
+				order.closed = true
+				tui.orders[payload.ID] = order
+			}
+			tui.ordersMu.Unlock()
+		}
+		log.Printf("Evento %s recebido para o pedido %s: %s", message.RoutingKey, payload.ID, message.Body)
 	}
 }

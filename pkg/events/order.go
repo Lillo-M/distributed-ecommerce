@@ -27,10 +27,10 @@ const (
 )
 
 var orderEventName = map[OrderEvent]string{
-	OrderEventCreated: "Order.Created",
-	OrderEventDeleted: "Order.Deleted",
-	OrderEventStockOk: "Order.StockOk",
-	OrderEventSent:    "Order.Sent",
+	OrderEventCreated: RoutingPedidoCriado,
+	OrderEventDeleted: RoutingPedidoExcluido,
+	OrderEventStockOk: RoutingPedidoEstoqueOk,
+	OrderEventSent:    RoutingPedidoEnviado,
 }
 
 func (order OrderEvent) String() string {

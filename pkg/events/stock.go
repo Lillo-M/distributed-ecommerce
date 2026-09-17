@@ -7,7 +7,7 @@ const (
 )
 
 var stockEventName = map[StockEvent]string{
-	StockEventUnavailable: "Stock.Unavailable",
+	StockEventUnavailable: RoutingEstoqueIndisponivel,
 }
 
 func (stock StockEvent) String() string {

@@ -8,8 +8,8 @@ const (
 )
 
 var paymentEventName = map[PaymentEvent]string{
-	PaymentEventApproved: "Payment.Approved",
-	PaymentEventRefused:  "Payment.Refused",
+	PaymentEventApproved: RoutingPagamentoAprovado,
+	PaymentEventRefused:  RoutingPagamentoRecusado,
 }
 
 func (payment PaymentEvent) String() string {

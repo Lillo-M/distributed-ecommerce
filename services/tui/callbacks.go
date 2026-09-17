@@ -6,6 +6,7 @@ import (
 	"eCommerce/pkg/exchanges"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -25,8 +26,13 @@ func (tui *TerminalUserInterface) Callbacks() MenuCallbacks {
 }
 
 func (tui *TerminalUserInterface) OnListProducts() error {
-	// TODO: conectar a consulta quando houver um contrato para consultar produtos.
-	return ErrActionUnavailable
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	products, err := tui.listProducts(ctx)
+	if err != nil {
+		return err
+	}
+	return displayProducts(os.Stdout, products)
 }
 
 func (tui *TerminalUserInterface) OnListOrders(customerID string) error {
@@ -35,14 +41,52 @@ func (tui *TerminalUserInterface) OnListOrders(customerID string) error {
 }
 
 func (tui *TerminalUserInterface) OnCreateOrder(request events.CreateOrderRequest) error {
-	return tui.publishOrderEvent(events.OrderEventCreated, request)
+	payload := events.PedidoPayload{
+		ID:     request.OrderID,
+		Status: "Criado",
+		Itens:  make([]events.ItemPedido, len(request.Items)),
+	}
+	for i, item := range request.Items {
+		payload.Itens[i] = events.ItemPedido{ProductID: item.ProductID, Quantity: item.Quantity}
+	}
+
+	tui.ordersMu.Lock()
+	defer tui.ordersMu.Unlock()
+	if _, exists := tui.orders[request.OrderID]; exists {
+		return fmt.Errorf("pedido %s já foi enviado nesta sessão", request.OrderID)
+	}
+	if err := tui.publishOrderEvent(events.OrderEventCreated, payload); err != nil {
+		return err
+	}
+	if tui.orders == nil {
+		tui.orders = make(map[string]sessionOrder)
+	}
+	tui.orders[request.OrderID] = sessionOrder{customerID: request.CustomerID, payload: payload}
+	return nil
 }
 
 func (tui *TerminalUserInterface) OnDeleteOrder(request events.DeleteOrderRequest) error {
-	return tui.publishOrderEvent(events.OrderEventDeleted, request)
+	tui.ordersMu.Lock()
+	defer tui.ordersMu.Unlock()
+	order, exists := tui.orders[request.OrderID]
+	if !exists || order.customerID != request.CustomerID {
+		return fmt.Errorf("pedido %s não encontrado para este usuário nesta sessão", request.OrderID)
+	}
+	if order.closed {
+		return fmt.Errorf("pedido %s já foi cancelado, recusado ou teve o pagamento aprovado", request.OrderID)
+	}
+
+	payload := order.payload
+	payload.Status = "Cancelado Manualmente"
+	if err := tui.publishOrderEvent(events.OrderEventDeleted, payload); err != nil {
+		return err
+	}
+	order.closed = true
+	tui.orders[request.OrderID] = order
+	return nil
 }
 
-func (tui *TerminalUserInterface) publishOrderEvent(event events.OrderEvent, payload any) error {
+func (tui *TerminalUserInterface) publishOrderEvent(event events.OrderEvent, payload events.PedidoPayload) error {
 	if tui.publisher == nil {
 		return fmt.Errorf("conexão de publicação indisponível")
 	}
