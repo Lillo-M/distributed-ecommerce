@@ -1,14 +1,23 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/chzyer/readline"
+
 	"context"
 	"eCommerce/pkg/config"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
-	"fmt"
-	"log"
-	"time"
+	"eCommerce/pkg/mock"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -19,6 +28,7 @@ type TerminalUserInterface struct {
 	Channel    *amqp.Channel
 	Queue      amqp.Queue
 	Messages   <-chan amqp.Delivery
+	isOpen     bool
 }
 
 func (tui *TerminalUserInterface) DestroyTUI() {
@@ -84,8 +94,12 @@ func CreateTUI() (*TerminalUserInterface, error) {
 
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
-		events.StockEventUnavailable.String(),
+		events.PaymentEventRefused.String(),
+		events.OrderEventSent.String(),
+		events.OrderEventStoreOk.String(),
+		events.StoreEventUnavailable.String(),
 	}
+
 	for _, key := range routingKeys {
 		if err := tui.Channel.QueueBind(
 			tui.Queue.Name,         // queue
@@ -125,6 +139,158 @@ func CreateTUI() (*TerminalUserInterface, error) {
 func (tui *TerminalUserInterface) handleMessage() {
 	for message := range tui.Messages {
 		log.Printf("Received a message: %s", message.Body)
+	}
+}
+
+func usage(w io.Writer, completer *readline.PrefixCompleter) {
+	io.WriteString(w, "commands:\n")
+	io.WriteString(w, completer.Tree("    "))
+}
+
+// Function constructor - constructs new function for listing given directory
+func listFiles(path string) func(string) []string {
+	return func(line string) []string {
+		names := make([]string, 0)
+		files, _ := os.ReadDir(path)
+		for _, f := range files {
+			names = append(names, f.Name())
+		}
+		return names
+	}
+}
+
+func filterInput(r rune) (rune, bool) {
+	switch r {
+	// block CtrlZ feature
+	case readline.CharCtrlZ:
+		return r, false
+	}
+	return r, true
+}
+func (tui *TerminalUserInterface) Start() {
+	tui.isOpen = true
+
+	products, err := mock.GetProducts("store.json")
+	if err != nil {
+		panic(err)
+	}
+
+	var completer = readline.NewPrefixCompleter(
+		readline.PcItem("help"),
+		readline.PcItem("?"),
+		readline.PcItem("show",
+			readline.PcItem("products"),
+			readline.PcItem("orders"),
+		),
+		readline.PcItem("create",
+			readline.PcItem("order",
+				readline.PcItem("-p",
+					readline.PcItemDynamic(func(string) []string {
+						names := make([]string, len(products))
+						for i, product := range products {
+							names[i] = product.Name
+						}
+						return names
+					},
+						readline.PcItem("-q",
+							readline.PcItemDynamic(func(string) []string {
+								return []string{"1", "2", "5", "10"}
+							}),
+						),
+					),
+				),
+			),
+		),
+		readline.PcItem("clear"),
+	)
+
+	l, err := readline.NewEx(&readline.Config{
+		Prompt:          "\033[31m»\033[0m ",
+		HistoryFile:     "/tmp/readline.tmp",
+		AutoComplete:    completer,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "exit",
+
+		HistorySearchFold:   true,
+		FuncFilterInputRune: filterInput,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer l.Close()
+	l.CaptureExitSignal()
+
+	log.Println("-- Main Microserice TUI ---")
+	log.Println("Type '?' for help")
+	log.SetOutput(l.Stderr())
+	tui.consoleLoop(l, completer, products)
+}
+
+func (tui *TerminalUserInterface) consoleLoop(l *readline.Instance, completer *readline.PrefixCompleter, products []mock.Product) {
+	for tui.isOpen {
+		line, err := l.Readline()
+		if err == readline.ErrInterrupt {
+			if len(line) == 0 {
+				break
+			} else {
+				continue
+			}
+		} else if err == io.EOF {
+			break
+		}
+
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "help" || line == "?":
+			usage(l.Stderr(), completer)
+		case strings.HasPrefix(line, "show"):
+			line := strings.TrimSpace(line[4:])
+			switch line {
+			case "orders":
+
+			case "products":
+				writer := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
+				for _, product := range products {
+					fmt.Fprintf(writer, " | %v:\t$ %v\n", product.Name, product.Price)
+				}
+				writer.Flush()
+			default:
+				log.Println("invalid argument ",
+					strconv.Quote(line))
+			}
+
+		case line == "quit" || line == "exit":
+			tui.isOpen = false
+		case line == "clear":
+			readline.ClearScreen(l.Stderr())
+		case strings.HasPrefix(line, "create"):
+			line := strings.TrimSpace(line[6:])
+			if strings.HasPrefix(line, "order") {
+				line := strings.TrimSpace(line[5:])
+				if strings.HasPrefix(line, "-p") {
+					line := strings.TrimSpace(line[2:])
+					if !strings.Contains(line, "-q") {
+						log.Println("to create an order specify the quantity with -q")
+					}
+					productName, quantityString, _ := strings.CutLast(line, "-q")
+					productName = strings.TrimSpace(productName)
+					quantityString = strings.TrimSpace(quantityString)
+					quantity, err := strconv.Atoi(strings.TrimSpace(quantityString))
+					if err != nil {
+						log.Println("invalid quantity argument " + strconv.Quote(quantityString))
+						break
+					}
+					log.Println("ordering: ", quantity, productName)
+
+				}
+			}
+
+		case line == "":
+		default:
+			log.Println("command ",
+				strconv.Quote(line),
+				" not found")
+		}
 	}
 }
 

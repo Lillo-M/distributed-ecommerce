@@ -5,14 +5,14 @@ type OrderEvent int
 const (
 	OrderEventCreated OrderEvent = iota
 	OrderEventDeleted
-	OrderEventStockOk
+	OrderEventStoreOk
 	OrderEventSent
 )
 
 var orderEventName = map[OrderEvent]string{
 	OrderEventCreated: "Order.Created",
 	OrderEventDeleted: "Order.Deleted",
-	OrderEventStockOk: "Order.StockOk",
+	OrderEventStoreOk: "Order.StockOk",
 	OrderEventSent:    "Order.Sent",
 }
 

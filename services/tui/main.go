@@ -7,8 +7,6 @@ func main() {
 	helpers.FailOnError(err, "Failed to create TUI")
 	defer tui.DestroyTUI()
 
-	var forever chan int
-
+	tui.Start()
 	tui.TestSend("Hello, World!")
-	<-forever
 }

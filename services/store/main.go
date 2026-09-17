@@ -63,7 +63,7 @@ func main() {
 			body := "Stock Unavailable!"
 			err = ch.PublishWithContext(ctx,
 				ecommerceExchange.Name,                // exchange
-				events.StockEventUnavailable.String(), // routing key
+				events.StoreEventUnavailable.String(), // routing key
 				false,                                 // mandatory
 				false,                                 // immediate
 				amqp.Publishing{
