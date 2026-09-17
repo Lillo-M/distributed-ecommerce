@@ -29,7 +29,8 @@ func main() {
 	defer ch.Close()
 
 	salesEx := exchanges.GetSalesExchangeInfo()
-	_ = ch.ExchangeDeclare(salesEx.Name, salesEx.Type, false, false, false, false, nil)
+	err = salesEx.Declare(ch)
+	helpers.FailOnError(err, "Erro ao declarar exchange de promoções")
 
 	cats := []string{"A", "B", "C"}
 

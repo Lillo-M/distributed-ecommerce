@@ -28,10 +28,14 @@ func main() {
 	defer ch.Close()
 
 	ecommerceEx := exchanges.GetEcommerceExchangeInfo()
+	err = ecommerceEx.Declare(ch)
+	helpers.FailOnError(err, "Erro ao declarar exchange eCommerce")
+
 	q, err := ch.QueueDeclare("fila.pagamento", false, false, false, false, nil)
 	helpers.FailOnError(err, "Erro na fila")
 
-	_ = ch.QueueBind(q.Name, events.RoutingPedidoEstoqueOk, ecommerceEx.Name, false, nil)
+	err = ch.QueueBind(q.Name, events.RoutingPedidoEstoqueOk, ecommerceEx.Name, false, nil)
+	helpers.FailOnError(err, "Erro ao associar confirmação de estoque")
 
 	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	helpers.FailOnError(err, "Erro ao consumir")

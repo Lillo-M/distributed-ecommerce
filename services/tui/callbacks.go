@@ -36,14 +36,13 @@ func (tui *TerminalUserInterface) OnListProducts() error {
 }
 
 func (tui *TerminalUserInterface) OnListOrders(customerID string) error {
-	// TODO: consultar pedidos e status do usuário quando essa operação existir.
-	return ErrActionUnavailable
+	return displayOrders(os.Stdout, tui.ordersForCustomer(customerID))
 }
 
 func (tui *TerminalUserInterface) OnCreateOrder(request events.CreateOrderRequest) error {
 	payload := events.PedidoPayload{
 		ID:     request.OrderID,
-		Status: "Criado",
+		Status: statusCreated,
 		Itens:  make([]events.ItemPedido, len(request.Items)),
 	}
 	for i, item := range request.Items {
@@ -72,16 +71,16 @@ func (tui *TerminalUserInterface) OnDeleteOrder(request events.DeleteOrderReques
 	if !exists || order.customerID != request.CustomerID {
 		return fmt.Errorf("pedido %s não encontrado para este usuário nesta sessão", request.OrderID)
 	}
-	if order.closed {
+	if !order.pending() {
 		return fmt.Errorf("pedido %s já foi cancelado, recusado ou teve o pagamento aprovado", request.OrderID)
 	}
 
 	payload := order.payload
-	payload.Status = "Cancelado Manualmente"
+	payload.Status = statusCancelled
 	if err := tui.publishOrderEvent(events.OrderEventDeleted, payload); err != nil {
 		return err
 	}
-	order.closed = true
+	order.payload = payload
 	tui.orders[request.OrderID] = order
 	return nil
 }

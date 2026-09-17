@@ -27,7 +27,6 @@ type TerminalUserInterface struct {
 type sessionOrder struct {
 	customerID string
 	payload    events.PedidoPayload
-	closed     bool
 }
 
 func (tui *TerminalUserInterface) DestroyTUI() {
@@ -60,15 +59,7 @@ func CreateTUI() (*TerminalUserInterface, error) {
 	tui.publisher = tui.Channel
 
 	var ecommerceExchange = exchanges.GetEcommerceExchangeInfo()
-	err = tui.Channel.ExchangeDeclare(
-		ecommerceExchange.Name, // name
-		ecommerceExchange.Type, // type
-		false,                  // durability
-		false,                  // auto-deleted
-		false,                  // internal
-		false,                  // no-wait
-		nil,                    // arguments
-	)
+	err = ecommerceExchange.Declare(tui.Channel)
 	if err != nil {
 		tui.DestroyTUI()
 		return nil, fmt.Errorf("declarar exchange: %w", err)
@@ -134,17 +125,8 @@ func (tui *TerminalUserInterface) handleMessage() {
 			continue
 		}
 
-		// Evita estornar novamente pedidos recusados ou cancelar pedidos já pagos.
-		switch message.RoutingKey {
-		case events.RoutingPagamentoAprovado, events.RoutingPagamentoRecusado,
-			events.RoutingPedidoEnviado, events.RoutingEstoqueIndisponivel:
-			tui.ordersMu.Lock()
-			if order, ok := tui.orders[payload.ID]; ok {
-				order.closed = true
-				tui.orders[payload.ID] = order
-			}
-			tui.ordersMu.Unlock()
+		if status, changed := tui.updateOrderStatus(payload.ID, message.RoutingKey); changed {
+			log.Printf("Pedido %s atualizado: %s", payload.ID, status)
 		}
-		log.Printf("Evento %s recebido para o pedido %s: %s", message.RoutingKey, payload.ID, message.Body)
 	}
 }

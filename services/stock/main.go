@@ -50,13 +50,16 @@ func main() {
 	defer ch.Close()
 
 	ecommerceEx := exchanges.GetEcommerceExchangeInfo()
+	err = ecommerceEx.Declare(ch)
+	helpers.FailOnError(err, "Erro ao declarar exchange eCommerce")
+
 	q, err := ch.QueueDeclare("fila.estoque", false, false, false, false, nil)
 	helpers.FailOnError(err, "Erro na fila")
 
-	_ = ch.QueueBind(q.Name, events.RoutingPedidoCriado, ecommerceEx.Name, false, nil)
-	_ = ch.QueueBind(q.Name, events.RoutingPedidoExcluido, ecommerceEx.Name, false, nil)
-	err = ch.QueueBind(q.Name, events.RoutingProdutosConsultar, ecommerceEx.Name, false, nil)
-	helpers.FailOnError(err, "Erro ao associar consulta de produtos")
+	for _, key := range []string{events.RoutingPedidoCriado, events.RoutingPedidoExcluido, events.RoutingProdutosConsultar} {
+		err = ch.QueueBind(q.Name, key, ecommerceEx.Name, false, nil)
+		helpers.FailOnError(err, "Erro ao associar evento "+key)
+	}
 
 	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
 	helpers.FailOnError(err, "Erro no consume")
