@@ -51,7 +51,7 @@ func main() {
 
 		body, _ := json.Marshal(promo)
 
-		privateKey, err := helpers.ReadPrivateKeyPEM("./pkg/private-keys/stock.pem")
+		privateKey, err := helpers.ReadPrivateKeyPEM("./pkg/private-keys/promotions.pem")
 		if err != nil {
 			log.Fatalf("Erro ao ler chave privada: %v", err)
 		}
