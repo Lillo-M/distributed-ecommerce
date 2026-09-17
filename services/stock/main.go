@@ -1,127 +1,80 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
-	"os"
-	"sync"
-
-	"eCommerce/pkg/config"
+	"context"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
+	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-type Product struct {
-	UUID     string  `json:"uuid"`
-	Name     string  `json:"name"`
-	Price    float64 `json:"price"`
-	Quantity int     `json:"quantity"`
-}
-
-var (
-	stockFile = "stock.json"
-	products  []Product
-	mu        sync.Mutex
-)
-
-func loadStock() {
-	data, err := os.ReadFile(stockFile)
-	if err == nil {
-		_ = json.Unmarshal(data, &products)
-	}
-}
-
-func saveStock() {
-	data, _ := json.MarshalIndent(products, "", "  ")
-	_ = os.WriteFile(stockFile, data, 0644)
-}
-
 func main() {
-	cfg, err := config.Load()
-	helpers.FailOnError(err, "Erro ao carregar configurações")
-
-	loadStock()
-
-	conn, err := amqp.Dial(cfg.RabbitMQURL)
-	helpers.FailOnError(err, "Erro no RabbitMQ")
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
+	helpers.FailOnError(err, "Failed to connect to RabbitMQ")
 	defer conn.Close()
 
 	ch, err := conn.Channel()
-	helpers.FailOnError(err, "Erro no canal")
+	helpers.FailOnError(err, "Failed to open a channel")
 	defer ch.Close()
 
-	ecommerceEx := exchanges.GetEcommerceExchangeInfo()
-	q, err := ch.QueueDeclare("fila.estoque", false, false, false, false, nil)
-	helpers.FailOnError(err, "Erro na fila")
+	queue, err := ch.QueueDeclare(
+		"",    // name
+		false, // durability
+		false, // delete when unused
+		true,  // exclusive
+		false, // no-wait
+		nil,
+	)
+	helpers.FailOnError(err, "Failed to declare a queue")
 
-	_ = ch.QueueBind(q.Name, events.RoutingPedidoCriado, ecommerceEx.Name, false, nil)
-	_ = ch.QueueBind(q.Name, events.RoutingPedidoExcluido, ecommerceEx.Name, false, nil)
+	var ecommerceExchange = exchanges.GetEcommerceExchangeInfo()
 
-	msgs, err := ch.Consume(q.Name, "", true, false, false, false, nil)
-	helpers.FailOnError(err, "Erro no consume")
+	err = ch.QueueBind(
+		queue.Name,                        // queue
+		events.OrderEventCreated.String(), // routing
+		ecommerceExchange.Name,            // exchange
+		false,                             // no-wait
+		nil,                               // arguments
+	)
+	helpers.FailOnError(err, "Failed to bind a queue")
 
-	log.Println("[Estoque] Serviço pronto e aguardando eventos...")
+	msgs, err := ch.Consume(
+		queue.Name, // queue
+		"",         // consumer
+		true,       // auto-ack
+		false,      // exclusive
+		false,      // no-local
+		false,      // no-wait
+		nil,        // args
+	)
+	helpers.FailOnError(err, "Failed to register a consumer")
 
-	for d := range msgs {
-		var p events.PedidoPayload
-		if err := json.Unmarshal(d.Body, &p); err != nil {
-			continue
+	var forever chan struct{}
+
+	go func() {
+		for d := range msgs {
+			log.Printf("Received a message: %s", d.Body)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			body := "Stock Unavailable!"
+			err = ch.PublishWithContext(ctx,
+				ecommerceExchange.Name,                // exchange
+				events.StockEventUnavailable.String(), // routing key
+				false,                                 // mandatory
+				false,                                 // immediate
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        []byte(body),
+				})
+			helpers.FailOnError(err, "Failed to publish a message")
+			log.Printf(" [x] Sent %s\n", body)
 		}
+	}()
 
-		mu.Lock()
-		if d.RoutingKey == events.RoutingPedidoCriado {
-			available := true
-			for _, item := range p.Itens {
-				found := false
-				for _, prod := range products {
-					if prod.UUID == item.ProductID && prod.Quantity >= item.Quantity {
-						found = true
-						break
-					}
-				}
-				if !found {
-					available = false
-					break
-				}
-			}
-
-			if available {
-				for _, item := range p.Itens {
-					for i := range products {
-						if products[i].UUID == item.ProductID {
-							products[i].Quantity -= item.Quantity
-						}
-					}
-				}
-				saveStock()
-				log.Printf("[Estoque] Pedido %s - Estoque OK", p.ID)
-				publishEvent(ch, ecommerceEx.Name, events.RoutingPedidoEstoqueOk, p)
-			} else {
-				log.Printf("[Estoque] Pedido %s - Estoque Indisponível", p.ID)
-				publishEvent(ch, ecommerceEx.Name, events.RoutingEstoqueIndisponivel, p)
-			}
-		} else if d.RoutingKey == events.RoutingPedidoExcluido {
-			for _, item := range p.Itens {
-				for i := range products {
-					if products[i].UUID == item.ProductID {
-						products[i].Quantity += item.Quantity
-					}
-				}
-			}
-			saveStock()
-			log.Printf("[Estoque] Pedido %s - Produtos estornados ao estoque", p.ID)
-		}
-		mu.Unlock()
-	}
-}
-
-func publishEvent(ch *amqp.Channel, exchange, rkey string, payload interface{}) {
-	body, _ := json.Marshal(payload)
-	_ = ch.Publish(exchange, rkey, false, false, amqp.Publishing{
-		ContentType: "application/json",
-		Body:        body,
-	})
+	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
+	<-forever
 }

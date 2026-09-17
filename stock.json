@@ -3,12 +3,12 @@
     "uuid": "e3a89304-4c28-4e89-9a74-d021c3258bd2",
     "name": "NVIDIA GeForce RTX 4080 Super",
     "price": 999.99,
-    "quantity": 3
+    "quantity": 4
   },
   {
     "uuid": "8f3b2110-63e5-4b1a-8c92-3112d8a4f910",
     "name": "AMD Ryzen 7 7800X3D Processor",
-    "price": 389,
+    "price": 389.00,
     "quantity": 8
   },
   {
