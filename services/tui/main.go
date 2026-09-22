@@ -8,5 +8,4 @@ func main() {
 	defer tui.DestroyTUI()
 
 	tui.Start()
-	tui.TestSend("Hello, World!")
 }

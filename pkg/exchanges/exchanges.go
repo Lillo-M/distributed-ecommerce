@@ -1,19 +1,19 @@
 package exchanges
 
-type exchangeInfo struct {
+type ExchangeInfo struct {
 	Name         string
 	Type string
 }
 
-func GetEcommerceExchangeInfo() exchangeInfo {
-	return exchangeInfo{
+func GetEcommerceExchangeInfo() ExchangeInfo {
+	return ExchangeInfo{
 		Name:         "eCommerce",
 		Type: "direct",
 	}
 }
 
-func GetSalesExchangeInfo() exchangeInfo {
-	return exchangeInfo{
+func GetSalesExchangeInfo() ExchangeInfo {
+	return ExchangeInfo{
 		Name:         "sales",
 		Type: "topic",
 	}

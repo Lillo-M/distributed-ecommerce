@@ -1,61 +1,50 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"uuid"
 
 	"github.com/chzyer/readline"
 
 	"context"
-	"eCommerce/pkg/config"
+	"eCommerce/pkg/dtos"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
+	"eCommerce/pkg/interfaces"
 	"eCommerce/pkg/mock"
+	"eCommerce/pkg/requests"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type TerminalUserInterface struct {
-	Config     *config.Config
-	Connection *amqp.Connection
-	Channel    *amqp.Channel
-	Queue      amqp.Queue
-	Messages   <-chan amqp.Delivery
-	isOpen     bool
+	interfaces.Service
+	Orders []mock.Order
+	Cart   []mock.Product
+	isOpen bool
 }
 
 func (tui *TerminalUserInterface) DestroyTUI() {
-	if tui.Channel != nil {
-		tui.Channel.Close()
-	}
-	if tui.Connection != nil {
-		tui.Connection.Close()
-	}
+	tui.CloseRMQChannel()
 }
 
 func CreateTUI() (*TerminalUserInterface, error) {
 	var tui *TerminalUserInterface = &TerminalUserInterface{}
 	var err error
-	tui.Config, err = config.Load()
-	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to load configuration")
-		return nil, err
-	}
 
-	tui.Connection, err = amqp.Dial(tui.Config.RabbitMQURL)
-	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to connect to RabbitMQ")
-		return nil, err
-	}
-
-	tui.Channel, err = tui.Connection.Channel()
+	err = tui.InitRMQChannel()
 	if err != nil {
 		helpers.LogErrorMessage(err, "Failed to open a channel")
 		tui.Connection.Close()
@@ -72,22 +61,9 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		false,                  // no-wait
 		nil,                    // arguments
 	)
+
 	if err != nil {
 		helpers.LogErrorMessage(err, "Failed to declare a exchange")
-		tui.DestroyTUI()
-		return nil, err
-	}
-
-	tui.Queue, err = tui.Channel.QueueDeclare(
-		"",    // name
-		false, // durability
-		false, // delete when unused
-		true,  // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		helpers.LogErrorMessage(err, "Failed to declare a queue")
 		tui.DestroyTUI()
 		return nil, err
 	}
@@ -95,8 +71,8 @@ func CreateTUI() (*TerminalUserInterface, error) {
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
 		events.PaymentEventRefused.String(),
-		events.OrderEventSent.String(),
-		events.OrderEventStoreOk.String(),
+		events.OrderSentEvent.String(),
+		events.OrderStoreOkEvent.String(),
 		events.StoreEventUnavailable.String(),
 	}
 
@@ -131,12 +107,12 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		return nil, err
 	}
 
-	go tui.handleMessage()
+	go tui.handleMessages()
 
 	return tui, err
 }
 
-func (tui *TerminalUserInterface) handleMessage() {
+func (tui *TerminalUserInterface) handleMessages() {
 	for message := range tui.Messages {
 		log.Printf("Received a message: %s", message.Body)
 	}
@@ -182,13 +158,54 @@ func (tui *TerminalUserInterface) Start() {
 			readline.PcItem("products"),
 			readline.PcItem("orders"),
 		),
+		readline.PcItem("delete",
+			readline.PcItem("order",
+				readline.PcItem("-id",
+					readline.PcItemDynamic(func(s string) []string { return tui.GetOrdersIds() }),
+				),
+				readline.PcItem("-n",
+					readline.PcItemDynamic(func(s string) []string { return tui.GetOrdersIndexes() }),
+				),
+			),
+		),
+		readline.PcItem("cart",
+			readline.PcItem("remove",
+				readline.PcItem("-p",
+					readline.PcItemDynamic(func(string) []string {
+						names := make([]string, len(tui.Cart))
+						for i, product := range tui.Cart {
+							names[i] = strconv.Quote(product.Name)
+						}
+						return names
+					},
+					),
+				),
+			),
+			readline.PcItem("add",
+				readline.PcItem("-p",
+					readline.PcItemDynamic(func(string) []string {
+						names := make([]string, len(products))
+						for i, product := range products {
+							names[i] = strconv.Quote(product.Name)
+						}
+						return names
+					},
+						readline.PcItem("-q",
+							readline.PcItemDynamic(func(string) []string {
+								return []string{"1", "2", "5", "10"}
+							}),
+						),
+					),
+				),
+			),
+		),
 		readline.PcItem("create",
 			readline.PcItem("order",
 				readline.PcItem("-p",
 					readline.PcItemDynamic(func(string) []string {
 						names := make([]string, len(products))
 						for i, product := range products {
-							names[i] = product.Name
+							names[i] = strconv.Quote(product.Name)
 						}
 						return names
 					},
@@ -226,85 +243,218 @@ func (tui *TerminalUserInterface) Start() {
 	tui.consoleLoop(l, completer, products)
 }
 
+func (tui *TerminalUserInterface) GetOrdersIds() []string {
+	var ids []string = make([]string, len(tui.Orders))
+	for i, order := range tui.Orders {
+		ids[i] = order.UUID
+	}
+	return ids
+}
+func (tui *TerminalUserInterface) GetOrdersIndexes() []string {
+	arr := make([]string, len(tui.Orders))
+	for i := range arr {
+		arr[i] = strconv.Itoa(i)
+	}
+	return arr
+}
+
+func splitInArguments(line string) []string {
+	var args []string
+	var current strings.Builder
+	inQuotes := false
+	var quoteChar rune
+
+	for _, r := range line {
+		switch {
+		// Start of a quoted section
+		case (r == '"' || r == '\'') && !inQuotes:
+			inQuotes = true
+			quoteChar = r
+
+		// End of a quoted section
+		case r == quoteChar && inQuotes:
+			inQuotes = false
+			quoteChar = 0
+
+		// Space outside of quotes triggers token emission
+		case r == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+
+		// Regular character inside or outside quotes
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
+}
+
 func (tui *TerminalUserInterface) consoleLoop(l *readline.Instance, completer *readline.PrefixCompleter, products []mock.Product) {
 	for tui.isOpen {
 		line, err := l.Readline()
-		if err == readline.ErrInterrupt {
+		if errors.Is(err, readline.ErrInterrupt) {
 			if len(line) == 0 {
 				break
-			} else {
-				continue
 			}
-		} else if err == io.EOF {
+			continue
+		} else if errors.Is(err, io.EOF) {
 			break
 		}
 
 		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		args := splitInArguments(line)
 		switch {
-		case line == "help" || line == "?":
+		case slices.Contains([]string{"help", "?"}, args[0]):
 			usage(l.Stderr(), completer)
-		case strings.HasPrefix(line, "show"):
-			line := strings.TrimSpace(line[4:])
-			switch line {
-			case "orders":
-
-			case "products":
-				writer := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
-				for _, product := range products {
-					fmt.Fprintf(writer, " | %v:\t$ %v\n", product.Name, product.Price)
-				}
-				writer.Flush()
-			default:
-				log.Println("invalid argument ",
-					strconv.Quote(line))
-			}
-
-		case line == "quit" || line == "exit":
+		case slices.Contains([]string{"quit", "exit"}, args[0]):
 			tui.isOpen = false
-		case line == "clear":
+		case args[0] == "clear":
 			readline.ClearScreen(l.Stderr())
-		case strings.HasPrefix(line, "create"):
-			line := strings.TrimSpace(line[6:])
-			if strings.HasPrefix(line, "order") {
-				line := strings.TrimSpace(line[5:])
-				if strings.HasPrefix(line, "-p") {
-					line := strings.TrimSpace(line[2:])
-					if !strings.Contains(line, "-q") {
-						log.Println("to create an order specify the quantity with -q")
-					}
-					productName, quantityString, _ := strings.CutLast(line, "-q")
-					productName = strings.TrimSpace(productName)
-					quantityString = strings.TrimSpace(quantityString)
-					quantity, err := strconv.Atoi(strings.TrimSpace(quantityString))
-					if err != nil {
-						log.Println("invalid quantity argument " + strconv.Quote(quantityString))
-						break
-					}
-					log.Println("ordering: ", quantity, productName)
-
-				}
-			}
-
-		case line == "":
+		case args[0] == "show":
+			tui.handleShowCommand(args[1:], products)
+		case args[0] == "create":
+			tui.handleCreateCommand()
+		case args[0] == "cart":
+			tui.handleAddCartCommand(args[1:], products)
 		default:
-			log.Println("command ",
-				strconv.Quote(line),
-				" not found")
+			log.Printf("command %q not found\n", args[0])
 		}
 	}
 }
 
-func (tui *TerminalUserInterface) TestSend(body string) {
+func (tui *TerminalUserInterface) handleShowCommand(args []string, products []mock.Product) {
+	if len(args) == 0 {
+		log.Println("usage: show [orders|products|cart]")
+		return
+	}
+
+	switch args[0] {
+	case "orders":
+		tui.renderOrdersTable()
+	case "cart":
+		tui.renderCartTable()
+	case "products":
+		renderProductsTable(products)
+	default:
+		log.Printf("invalid argument %q\n", args[0])
+	}
+}
+
+func (tui *TerminalUserInterface) handleAddCartCommand(args []string, products []mock.Product) {
+	if len(args) == 0 || args[0] != "add" {
+		log.Println("usage: cart add -p <product_name> -q <quantity>")
+		return
+	}
+
+	fs := flag.NewFlagSet("cart add", flag.ContinueOnError)
+	productName := fs.String("p", "", "Product name")
+	quantity := fs.Int("q", 0, "Quantity")
+
+	if err := fs.Parse(args[1:]); err != nil {
+		return
+	}
+
+	if *productName == "" || *quantity <= 0 {
+		log.Println("both -p (product name) and -q (quantity > 0) are required")
+		return
+	}
+
+	productIdx := slices.IndexFunc(products, func(p mock.Product) bool {
+		return p.Name == *productName
+	})
+
+	if productIdx == -1 {
+		log.Printf("invalid product '%q'\n", *productName)
+		return
+	}
+
+	selected := products[productIdx]
+	selected.Quantity = *quantity
+	tui.Cart = append(tui.Cart, selected)
+}
+
+func (tui *TerminalUserInterface) handleCreateCommand() {
+	orderId := uuid.New().String()
+	requestBytes, err := json.Marshal(requests.CreateOrderRequest{
+		Id: orderId,
+		Products: func() []dtos.ProductDto {
+			productDtos := make([]dtos.ProductDto, len(tui.Cart))
+			for i, product := range tui.Cart {
+				productDtos[i] = dtos.ProductDto{ProductId: product.UUID, Quantity: product.Quantity}
+			}
+			return productDtos
+		}(),
+	})
+	if err != nil {
+		log.Printf("failed to serialize request: %v\n", err)
+		return
+	}
+
+	cart := make([]mock.Product, len(tui.Cart))
+	copy(cart, tui.Cart)
+	order := mock.Order{
+		UUID:     orderId,
+		Products: cart,
+	}
+
+	tui.Cart = nil
+	tui.Orders = append(tui.Orders, order)
+	tui.SendToECommerceExchange(requestBytes, events.OrderCreatedEvent)
+}
+
+func (tui *TerminalUserInterface) renderOrdersTable() {
+	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
+	defer w.Flush()
+
+	for idx, order := range tui.Orders {
+		fmt.Fprintf(w, "Order N° %v\tid %v\n", idx, order.UUID)
+		for _, product := range order.Products {
+			fmt.Fprintf(w, "- %d\t%s\t$ %v\n",
+				product.Quantity, product.Name, product.Price)
+		}
+	}
+}
+
+func (tui *TerminalUserInterface) renderCartTable() {
+	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
+	defer w.Flush()
+
+	for _, p := range tui.Cart {
+		fmt.Fprintf(w, " | %v:\t$ %s\n", p.Quantity, p.Name)
+	}
+}
+
+func renderProductsTable(products []mock.Product) {
+	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
+	defer w.Flush()
+
+	for _, p := range products {
+		fmt.Fprintf(w, " | %s:\t$ %v\n", p.Name, p.Price)
+	}
+}
+
+func (tui *TerminalUserInterface) SendToECommerceExchange(body []byte, routingKey events.OrderEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var err = tui.Channel.PublishWithContext(ctx,
 		exchanges.GetEcommerceExchangeInfo().Name, // exchange
-		events.OrderEventCreated.String(),         // routing key
+		routingKey.String(),                       // routing key
 		false,                                     // mandatory
 		false,                                     // immediate
 		amqp.Publishing{
-			ContentType: "text/plain",
+			ContentType: "application/json",
 			Body:        []byte(body),
 		})
 	helpers.FailOnError(err, "Failed to publish a message")
