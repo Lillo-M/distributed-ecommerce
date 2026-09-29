@@ -3,11 +3,11 @@ package events
 type StoreEvent int
 
 const (
-	StoreEventUnavailable StoreEvent = iota
+	StoreUnavailableEvent StoreEvent = iota
 )
 
 var storeEventName = map[StoreEvent]string{
-	StoreEventUnavailable: "Store.Unavailable",
+	StoreUnavailableEvent: "Store.Unavailable",
 }
 
 func (stock StoreEvent) String() string {

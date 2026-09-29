@@ -24,6 +24,7 @@ import (
 	"eCommerce/pkg/helpers"
 	"eCommerce/pkg/interfaces"
 	"eCommerce/pkg/mock"
+	"eCommerce/pkg/notifications"
 	"eCommerce/pkg/requests"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -31,13 +32,9 @@ import (
 
 type TerminalUserInterface struct {
 	interfaces.Service
-	Orders []mock.Order
+	Orders map[string]mock.OrderInfo
 	Cart   []mock.Product
 	isOpen bool
-}
-
-func (tui *TerminalUserInterface) DestroyTUI() {
-	tui.CloseRMQChannel()
 }
 
 func CreateTUI() (*TerminalUserInterface, error) {
@@ -61,10 +58,9 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		false,                  // no-wait
 		nil,                    // arguments
 	)
-
 	if err != nil {
 		helpers.LogErrorMessage(err, "Failed to declare a exchange")
-		tui.DestroyTUI()
+		tui.CloseRMQChannel()
 		return nil, err
 	}
 
@@ -73,7 +69,7 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		events.PaymentEventRefused.String(),
 		events.OrderSentEvent.String(),
 		events.OrderStoreOkEvent.String(),
-		events.StoreEventUnavailable.String(),
+		events.StoreUnavailableEvent.String(),
 	}
 
 	for _, key := range routingKeys {
@@ -85,37 +81,68 @@ func CreateTUI() (*TerminalUserInterface, error) {
 			nil,                    // arguments
 		); err != nil {
 			helpers.LogErrorMessage(err, fmt.Sprintf("Failed to bind queue '%s' to key '%s'", tui.Queue.Name, key))
-			tui.DestroyTUI()
+			tui.CloseRMQChannel()
 			return nil, err
 		}
 	}
 
-	tui.Messages, err = tui.Channel.Consume(
-		tui.Queue.Name, // queue
-		"",             // consumer
-		true,           // auto-ack
-		false,          // exclusive
-		false,          // no-local
-		false,          // no-wait
-		nil,            // args
-	)
-	if err != nil {
-		helpers.LogErrorMessage(err,
-			fmt.Sprintf("Failed to register a consumer to queue '%v'",
-				tui.Queue.Name))
-		tui.DestroyTUI()
-		return nil, err
-	}
-
-	go tui.handleMessages()
+	tui.StartConsuming(tui.handleMessages)
 
 	return tui, err
 }
 
-func (tui *TerminalUserInterface) handleMessages() {
-	for message := range tui.Messages {
-		log.Printf("Received a message: %s", message.Body)
+func (tui *TerminalUserInterface) handleMessages(message amqp.Delivery) {
+	log.Printf("Received a message: %s", message.Body)
+	switch message.RoutingKey {
+	case events.PaymentEventApproved.String():
+	case events.PaymentEventRefused.String():
+	case events.OrderSentEvent.String():
+	case events.OrderStoreOkEvent.String():
+		tui.handleStoreOk(message)
+	case events.StoreUnavailableEvent.String():
+		tui.handleStoreUnavailable(message)
+	default:
+		log.Printf("routing key '%q' unkown\n", message.RoutingKey)
 	}
+}
+
+func (tui *TerminalUserInterface) handleStoreOk(message amqp.Delivery) {
+	notification := notifications.StoreAvailability{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+	}
+
+	order, ok := tui.Orders[notification.OrderId]
+	if !ok {
+		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.Status = mock.OrderStatusStockReserved
+}
+
+func (tui *TerminalUserInterface) handleStoreUnavailable(message amqp.Delivery) {
+	notification := notifications.StoreAvailability{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+	}
+
+	requestBytes, err := json.Marshal(requests.DeleteOrderRequest{
+		OrderId: notification.OrderId,
+	})
+	if err != nil {
+		log.Printf("failed to serialize request: %v\n", err)
+		return
+	}
+
+	tui.SendToECommerceExchange(requestBytes, events.OrderDeletedEvent)
+	order, ok := tui.Orders[notification.OrderId]
+	if !ok {
+		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.Status = mock.OrderStatusOutOfStock
 }
 
 func usage(w io.Writer, completer *readline.PrefixCompleter) {
@@ -157,6 +184,7 @@ func (tui *TerminalUserInterface) Start() {
 		readline.PcItem("show",
 			readline.PcItem("products"),
 			readline.PcItem("orders"),
+			readline.PcItem("cart"),
 		),
 		readline.PcItem("delete",
 			readline.PcItem("order",
@@ -200,23 +228,7 @@ func (tui *TerminalUserInterface) Start() {
 			),
 		),
 		readline.PcItem("create",
-			readline.PcItem("order",
-				readline.PcItem("-p",
-					readline.PcItemDynamic(func(string) []string {
-						names := make([]string, len(products))
-						for i, product := range products {
-							names[i] = strconv.Quote(product.Name)
-						}
-						return names
-					},
-						readline.PcItem("-q",
-							readline.PcItemDynamic(func(string) []string {
-								return []string{"1", "2", "5", "10"}
-							}),
-						),
-					),
-				),
-			),
+			readline.PcItem("order"),
 		),
 		readline.PcItem("clear"),
 	)
@@ -245,8 +257,10 @@ func (tui *TerminalUserInterface) Start() {
 
 func (tui *TerminalUserInterface) GetOrdersIds() []string {
 	var ids []string = make([]string, len(tui.Orders))
-	for i, order := range tui.Orders {
+	i := 0
+	for _, order := range tui.Orders {
 		ids[i] = order.UUID
+		i += 1
 	}
 	return ids
 }
@@ -258,6 +272,7 @@ func (tui *TerminalUserInterface) GetOrdersIndexes() []string {
 	return arr
 }
 
+// * Made by Gemini
 func splitInArguments(line string) []string {
 	var args []string
 	var current strings.Builder
@@ -326,7 +341,7 @@ func (tui *TerminalUserInterface) consoleLoop(l *readline.Instance, completer *r
 		case args[0] == "create":
 			tui.handleCreateCommand()
 		case args[0] == "cart":
-			tui.handleAddCartCommand(args[1:], products)
+			tui.handleCartCommand(args[1:], products)
 		default:
 			log.Printf("command %q not found\n", args[0])
 		}
@@ -351,23 +366,66 @@ func (tui *TerminalUserInterface) handleShowCommand(args []string, products []mo
 	}
 }
 
-func (tui *TerminalUserInterface) handleAddCartCommand(args []string, products []mock.Product) {
-	if len(args) == 0 || args[0] != "add" {
-		log.Println("usage: cart add -p <product_name> -q <quantity>")
+func (tui *TerminalUserInterface) handleCartCommand(args []string, products []mock.Product) {
+	if len(args) == 0 || (args[0] != "add" && args[0] != "remove") {
+		log.Println("usage: cart [add|remove] -p <product_name> -q <quantity>")
 		return
 	}
 
+	switch args[0] {
+	case "add":
+		err := tui.handleCartAddCommand(args, products)
+		if err != nil {
+			log.Printf("failed add product to cart: %v\n", err)
+		}
+	case "remove":
+		err := tui.handleCartRemoveCommand(args, products)
+		if err != nil {
+			log.Printf("failed remove product from cart: %v\n", err)
+		}
+	default:
+		log.Printf("invalid argument %q\n", args[0])
+	}
+}
+
+func (tui *TerminalUserInterface) handleCartRemoveCommand(args []string, products []mock.Product) error {
+	fs := flag.NewFlagSet("cart remove", flag.ContinueOnError)
+	productName := fs.String("p", "", "Product name")
+
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	if *productName == "" {
+		log.Println("-p (product name) is required")
+		return nil
+	}
+
+	productIdx := slices.IndexFunc(products, func(p mock.Product) bool {
+		return p.Name == *productName
+	})
+
+	if productIdx == -1 {
+		log.Printf("the product '%q' is not in the cart\n", *productName)
+		return nil
+	}
+
+	tui.Cart = slices.Delete(tui.Cart, productIdx-1, productIdx)
+	return nil
+}
+
+func (tui *TerminalUserInterface) handleCartAddCommand(args []string, products []mock.Product) error {
 	fs := flag.NewFlagSet("cart add", flag.ContinueOnError)
 	productName := fs.String("p", "", "Product name")
 	quantity := fs.Int("q", 0, "Quantity")
 
 	if err := fs.Parse(args[1:]); err != nil {
-		return
+		return err
 	}
 
 	if *productName == "" || *quantity <= 0 {
 		log.Println("both -p (product name) and -q (quantity > 0) are required")
-		return
+		return nil
 	}
 
 	productIdx := slices.IndexFunc(products, func(p mock.Product) bool {
@@ -376,15 +434,20 @@ func (tui *TerminalUserInterface) handleAddCartCommand(args []string, products [
 
 	if productIdx == -1 {
 		log.Printf("invalid product '%q'\n", *productName)
-		return
+		return nil
 	}
 
 	selected := products[productIdx]
 	selected.Quantity = *quantity
 	tui.Cart = append(tui.Cart, selected)
+	return nil
 }
 
 func (tui *TerminalUserInterface) handleCreateCommand() {
+	if len(tui.Cart) <= 0 {
+		log.Printf("can't order an empty cart\n")
+		return
+	}
 	orderId := uuid.New().String()
 	requestBytes, err := json.Marshal(requests.CreateOrderRequest{
 		Id: orderId,
@@ -403,22 +466,28 @@ func (tui *TerminalUserInterface) handleCreateCommand() {
 
 	cart := make([]mock.Product, len(tui.Cart))
 	copy(cart, tui.Cart)
-	order := mock.Order{
+	order := mock.OrderInfo{
 		UUID:     orderId,
 		Products: cart,
+		Status:   mock.OrderStatusCreated,
 	}
 
 	tui.Cart = nil
-	tui.Orders = append(tui.Orders, order)
+	tui.Orders[order.UUID] = order
 	tui.SendToECommerceExchange(requestBytes, events.OrderCreatedEvent)
 }
 
 func (tui *TerminalUserInterface) renderOrdersTable() {
+	if len(tui.Orders) <= 0 {
+		log.Println("There are no ongoing orders")
+		return
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
 	defer w.Flush()
 
 	for idx, order := range tui.Orders {
-		fmt.Fprintf(w, "Order N° %v\tid %v\n", idx, order.UUID)
+		fmt.Fprintf(w, "Order N° %v\tid %v\tStatus %v\n", idx, order.UUID, order.Status)
 		for _, product := range order.Products {
 			fmt.Fprintf(w, "- %d\t%s\t$ %v\n",
 				product.Quantity, product.Name, product.Price)
@@ -427,15 +496,24 @@ func (tui *TerminalUserInterface) renderOrdersTable() {
 }
 
 func (tui *TerminalUserInterface) renderCartTable() {
+	if len(tui.Cart) <= 0 {
+		log.Println("There are no products in the cart")
+		return
+	}
 	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
 	defer w.Flush()
 
 	for _, p := range tui.Cart {
-		fmt.Fprintf(w, " | %v:\t$ %s\n", p.Quantity, p.Name)
+		fmt.Fprintf(w, " | %v:\t%s\n", p.Quantity, p.Name)
 	}
 }
 
 func renderProductsTable(products []mock.Product) {
+	if len(products) <= 0 {
+		log.Println("There are no products available")
+		return
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 1, 1, 1, ' ', 0)
 	defer w.Flush()
 
