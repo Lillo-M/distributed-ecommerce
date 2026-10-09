@@ -70,6 +70,8 @@ func CreateStore() (*Store, error) {
 		return nil, err
 	}
 
+	store.OrderRequests = make(map[string]requests.CreateOrderRequest)
+
 	store.StartConsuming(store.HandleMessages)
 
 	return store, nil
@@ -87,7 +89,7 @@ func (this *Store) HandleMessages(message amqp.Delivery) {
 	case events.OrderCreatedEvent.String():
 		this.handleOrderCreated(message)
 	case events.OrderDeletedEvent.String():
-		log.Fatalf("Routing key not handled '%v'\n", message.RoutingKey)
+		this.handleOrderDeleted(message)
 	default:
 		log.Fatalf("Unknown routing key '%v'\n", message.RoutingKey)
 	}
@@ -105,28 +107,31 @@ func (this *Store) handleOrderCreated(message amqp.Delivery) {
 		log.Printf("- %v %v\n", product.Quantity, strconv.Quote(this.Products[product.ProductId].Name))
 	}
 
+	var outOfStock bool = false
+
 	for _, productOrdered := range request.Products {
 		storeProduct, ok := this.Products[productOrdered.ProductId]
 		if !ok {
 			log.Fatalf("invalid product id '%v'\n", productOrdered.ProductId)
 			return
 		}
+		p := this.Products[productOrdered.ProductId]
+		p.Quantity -= productOrdered.Quantity
+		this.Products[productOrdered.ProductId] = p
 		if storeProduct.Quantity < productOrdered.Quantity {
-			this.sendNotification(
-				notifications.StoreAvailability{OrderId: request.Id},
-				events.StoreUnavailableEvent,
-			)
-			return
+			outOfStock = true
 		}
-	}
-
-	for _, product := range request.Products {
-		p := this.Products[product.ProductId]
-		p.Quantity -= product.Quantity
 	}
 
 	this.OrderRequests[request.Id] = request
 
+	if outOfStock {
+		this.sendNotification(
+			notifications.StoreAvailability{OrderId: request.Id},
+			events.StoreUnavailableEvent,
+		)
+		return
+	}
 	this.sendNotification(
 		notifications.StoreAvailability{OrderId: request.Id},
 		events.OrderStoreOkEvent,

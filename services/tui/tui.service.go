@@ -86,24 +86,71 @@ func CreateTUI() (*TerminalUserInterface, error) {
 		}
 	}
 
+	tui.Orders = make(map[string]mock.OrderInfo)
+
 	tui.StartConsuming(tui.handleMessages)
 
 	return tui, err
 }
 
 func (tui *TerminalUserInterface) handleMessages(message amqp.Delivery) {
-	log.Printf("Received a message: %s", message.Body)
 	switch message.RoutingKey {
 	case events.PaymentEventApproved.String():
+		tui.handlePaymentApproved(message)
+		log.Printf("Received a payment approved: %s", message.Body)
 	case events.PaymentEventRefused.String():
+		tui.handlePaymentRefused(message)
+		log.Printf("Received a payment refused: %s", message.Body)
 	case events.OrderSentEvent.String():
+		log.Printf("Received an order sent: %s", message.Body)
 	case events.OrderStoreOkEvent.String():
 		tui.handleStoreOk(message)
+		log.Printf("Received a store ok: %s", message.Body)
 	case events.StoreUnavailableEvent.String():
 		tui.handleStoreUnavailable(message)
+		log.Printf("Received a store unavailable: %s", message.Body)
 	default:
 		log.Printf("routing key '%q' unkown\n", message.RoutingKey)
 	}
+}
+
+func (tui *TerminalUserInterface) handlePaymentApproved(message amqp.Delivery) {
+	notification := notifications.StoreAvailability{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+	}
+
+	order, ok := tui.Orders[notification.OrderId]
+	if !ok {
+		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.Status = mock.OrderStatusPaymentApproved
+}
+
+func (tui *TerminalUserInterface) handlePaymentRefused(message amqp.Delivery) {
+	notification := notifications.StoreAvailability{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+	}
+
+	requestBytes, err := json.Marshal(requests.DeleteOrderRequest{
+		OrderId: notification.OrderId,
+	})
+	if err != nil {
+		log.Printf("failed to serialize request: %v\n", err)
+		return
+	}
+
+	tui.SendToECommerceExchange(requestBytes, events.OrderDeletedEvent)
+	order, ok := tui.Orders[notification.OrderId]
+	if !ok {
+		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.Status = mock.OrderStatusPaymentDenied
 }
 
 func (tui *TerminalUserInterface) handleStoreOk(message amqp.Delivery) {
@@ -119,6 +166,7 @@ func (tui *TerminalUserInterface) handleStoreOk(message amqp.Delivery) {
 		return
 	}
 	order.Status = mock.OrderStatusStockReserved
+	tui.Orders[notification.OrderId] = order
 }
 
 func (tui *TerminalUserInterface) handleStoreUnavailable(message amqp.Delivery) {
@@ -143,6 +191,7 @@ func (tui *TerminalUserInterface) handleStoreUnavailable(message amqp.Delivery) 
 		return
 	}
 	order.Status = mock.OrderStatusOutOfStock
+	tui.Orders[notification.OrderId] = order
 }
 
 func usage(w io.Writer, completer *readline.PrefixCompleter) {
@@ -170,6 +219,7 @@ func filterInput(r rune) (rune, bool) {
 	}
 	return r, true
 }
+
 func (tui *TerminalUserInterface) Start() {
 	tui.isOpen = true
 

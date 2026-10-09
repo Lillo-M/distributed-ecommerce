@@ -1,0 +1,123 @@
+services:
+  rabbitmq:
+    image: rabbitmq:management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  store:
+    image: golang:alpine
+    container_name: ms-store
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/store
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  payment:
+    image: golang:alpine
+    container_name: ms-payment
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/payment
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  delivery:
+    image: golang:alpine
+    container_name: ms-delivery
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/delivery
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  sales:
+    image: golang:alpine
+    container_name: ms-sales
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/sales
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  consumer1:
+    image: golang:alpine
+    container_name: ms-consumer1
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/saleConsumer1
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  consumer2:
+    image: golang:alpine
+    container_name: ms-consumer2
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/saleConsumer2
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  tui:
+    image: golang:alpine
+    container_name: ms-tui
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    tty: true
+    stdin_open: true
+    env_file: ".env"
+    command: go run ./services/tui
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  rabbitmq_data:
+  rabbitmq_log:
+  go-modules:
