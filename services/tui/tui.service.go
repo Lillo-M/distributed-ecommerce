@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -94,6 +98,17 @@ func CreateTUI() (*TerminalUserInterface, error) {
 }
 
 func (tui *TerminalUserInterface) handleMessages(message amqp.Delivery) {
+	producerKey, err := helpers.GetProducerPublicKey(message)
+	if err != nil {
+		log.Printf("Failed to read the producer's public key routing key '%v': %v", message.RoutingKey, err)
+		return
+	}
+	err = helpers.VerifyMessage(message, producerKey)
+	if err != nil {
+		log.Printf("Failed to validate the producer's public key of the event '%v': %v", message.RoutingKey, err)
+		return
+	}
+
 	switch message.RoutingKey {
 	case events.PaymentEventApproved.String():
 		tui.handlePaymentApproved(message)
@@ -102,6 +117,7 @@ func (tui *TerminalUserInterface) handleMessages(message amqp.Delivery) {
 		tui.handlePaymentRefused(message)
 		log.Printf("Received a payment refused: %s", message.Body)
 	case events.OrderSentEvent.String():
+		tui.handleOrderSent(message)
 		log.Printf("Received an order sent: %s", message.Body)
 	case events.OrderStoreOkEvent.String():
 		tui.handleStoreOk(message)
@@ -127,6 +143,23 @@ func (tui *TerminalUserInterface) handlePaymentApproved(message amqp.Delivery) {
 		return
 	}
 	order.Status = mock.OrderStatusPaymentApproved
+	tui.Orders[notification.OrderId] = order
+}
+
+func (tui *TerminalUserInterface) handleOrderSent(message amqp.Delivery) {
+	notification := notifications.DeliveryStatus{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+	}
+
+	order, ok := tui.Orders[notification.OrderId]
+	if !ok {
+		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.Status = mock.OrderStatusSent
+	tui.Orders[notification.OrderId] = order
 }
 
 func (tui *TerminalUserInterface) handlePaymentRefused(message amqp.Delivery) {
@@ -144,13 +177,14 @@ func (tui *TerminalUserInterface) handlePaymentRefused(message amqp.Delivery) {
 		return
 	}
 
-	tui.SendToECommerceExchange(requestBytes, events.OrderDeletedEvent)
+	tui.publishEvent(requestBytes, events.OrderDeletedEvent)
 	order, ok := tui.Orders[notification.OrderId]
 	if !ok {
 		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusPaymentDenied
+	tui.Orders[notification.OrderId] = order
 }
 
 func (tui *TerminalUserInterface) handleStoreOk(message amqp.Delivery) {
@@ -184,7 +218,7 @@ func (tui *TerminalUserInterface) handleStoreUnavailable(message amqp.Delivery) 
 		return
 	}
 
-	tui.SendToECommerceExchange(requestBytes, events.OrderDeletedEvent)
+	tui.publishEvent(requestBytes, events.OrderDeletedEvent)
 	order, ok := tui.Orders[notification.OrderId]
 	if !ok {
 		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
@@ -524,7 +558,7 @@ func (tui *TerminalUserInterface) handleCreateCommand() {
 
 	tui.Cart = nil
 	tui.Orders[order.UUID] = order
-	tui.SendToECommerceExchange(requestBytes, events.OrderCreatedEvent)
+	tui.publishEvent(requestBytes, events.OrderCreatedEvent)
 }
 
 func (tui *TerminalUserInterface) renderOrdersTable() {
@@ -572,7 +606,30 @@ func renderProductsTable(products []mock.Product) {
 	}
 }
 
-func (tui *TerminalUserInterface) SendToECommerceExchange(body []byte, routingKey events.OrderEvent) {
+func (tui *TerminalUserInterface) publishEvent(payload []byte, routingKey events.OrderEvent) {
+	privateKey, err := helpers.ReadPrivateKeyPEM("./services/tui/tui.pem")
+	if err != nil {
+		log.Fatalf("Failed to read private key: %v", err)
+	}
+
+	checksum := sha256.Sum256(payload)
+
+	signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("Failed to sign payload: %v", err)
+	}
+
+	tui.SendToECommerceExchange(
+		amqp.Publishing{
+			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
+			Body:        payload,
+		},
+		routingKey,
+	)
+}
+
+func (tui *TerminalUserInterface) SendToECommerceExchange(publishing amqp.Publishing, routingKey interfaces.Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -581,10 +638,8 @@ func (tui *TerminalUserInterface) SendToECommerceExchange(body []byte, routingKe
 		routingKey.String(),                       // routing key
 		false,                                     // mandatory
 		false,                                     // immediate
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        []byte(body),
-		})
+		publishing,
+	)
 	helpers.FailOnError(err, "Failed to publish a message")
-	log.Printf(" [x] Sent %s\n", body)
+	log.Printf(" [x] Sent %s\n", publishing.Body)
 }

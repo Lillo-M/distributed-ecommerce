@@ -63,6 +63,17 @@ func CreateConsumerService() (*ConsumerService, error) {
 }
 
 func (this *ConsumerService) HandleMessages(message amqp.Delivery) {
+	producerKey, err := helpers.GetProducerPublicKey(message)
+	if err != nil {
+		log.Printf("Failed to read the producer's public key routing key '%v': %v", message.RoutingKey, err)
+		return
+	}
+	err = helpers.VerifyMessage(message, producerKey)
+	if err != nil {
+		log.Printf("Failed to validate the producer's public key of the event '%v': %v", message.RoutingKey, err)
+		return
+	}
+
 	switch message.RoutingKey {
 	case events.SaleCategoryA.String():
 		fallthrough

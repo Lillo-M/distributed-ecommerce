@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
@@ -35,11 +39,11 @@ func CreateSalesService() (*SalesService, error) {
 	err = sales.Channel.ExchangeDeclare(
 		salesExchange.Name, // name
 		salesExchange.Type, // type
-		false,                  // durability
-		false,                  // auto-deleted
-		false,                  // internal
-		false,                  // no-wait
-		nil,                    // arguments
+		false,              // durability
+		false,              // auto-deleted
+		false,              // internal
+		false,              // no-wait
+		nil,                // arguments
 	)
 
 	if err != nil {
@@ -93,22 +97,39 @@ func (this *SalesService) sendNotification(object any, event interfaces.Event) {
 		log.Printf("failed to serialize request: %v\n", err)
 		return
 	}
-	this.SendToSalesExchange(notification, event)
+
+	privateKey, err := helpers.ReadPrivateKeyPEM("./services/sales/sales.pem")
+	if err != nil {
+		log.Fatalf("Failed to read private key: %v", err)
+	}
+
+	checksum := sha256.Sum256(notification)
+
+	signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("Failed to sign payload: %v", err)
+	}
+	this.SendToSalesExchange(
+		amqp.Publishing{
+			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
+			Body:        notification,
+		},
+		event,
+	)
 }
 
-func (this *SalesService) SendToSalesExchange(body []byte, routingKey interfaces.Event) {
+func (this *SalesService) SendToSalesExchange(publishing amqp.Publishing, routingKey interfaces.Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var err = this.Channel.PublishWithContext(ctx,
 		exchanges.GetSalesExchangeInfo().Name, // exchange
-		routingKey.String(),                       // routing key
-		false,                                     // mandatory
-		false,                                     // immediate
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        []byte(body),
-		})
+		routingKey.String(),                   // routing key
+		false,                                 // mandatory
+		false,                                 // immediate
+		publishing,
+	)
 	helpers.FailOnError(err, "Failed to publish a message")
-	log.Printf(" [x] Sent %s\n", body)
+	log.Printf(" [x] Sent %s\n", publishing.Body)
 }

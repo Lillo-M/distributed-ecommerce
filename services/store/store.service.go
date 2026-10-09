@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto"
+	crand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
@@ -77,14 +81,25 @@ func CreateStore() (*Store, error) {
 	return store, nil
 }
 
-func (store *Store) initProductsMap(products []mock.Product) {
-	store.Products = make(map[string]mock.Product)
+func (this *Store) initProductsMap(products []mock.Product) {
+	this.Products = make(map[string]mock.Product)
 	for _, product := range products {
-		store.Products[product.UUID] = product
+		this.Products[product.UUID] = product
 	}
 }
 
 func (this *Store) HandleMessages(message amqp.Delivery) {
+	producerKey, err := helpers.GetProducerPublicKey(message)
+	if err != nil {
+		log.Printf("Failed to read the producer's public key routing key '%v': %v", message.RoutingKey, err)
+		return
+	}
+	err = helpers.VerifyMessage(message, producerKey)
+	if err != nil {
+		log.Printf("Failed to validate the producer's public key of the event '%v': %v", message.RoutingKey, err)
+		return
+	}
+
 	switch message.RoutingKey {
 	case events.OrderCreatedEvent.String():
 		this.handleOrderCreated(message)
@@ -167,10 +182,29 @@ func (this *Store) sendNotification(object any, event interfaces.Event) {
 		log.Printf("failed to serialize request: %v\n", err)
 		return
 	}
-	this.SendToECommerceExchange(notification, event)
+
+	privateKey, err := helpers.ReadPrivateKeyPEM("./services/store/store.pem")
+	if err != nil {
+		log.Fatalf("Failed to read private key: %v", err)
+	}
+
+	checksum := sha256.Sum256(notification)
+
+	signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("Failed to sign payload: %v", err)
+	}
+	this.SendToECommerceExchange(
+		amqp.Publishing{
+			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
+			Body:        notification,
+		},
+		event,
+	)
 }
 
-func (this *Store) SendToECommerceExchange(body []byte, routingKey interfaces.Event) {
+func (this *Store) SendToECommerceExchange(publishing amqp.Publishing, routingKey interfaces.Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -179,10 +213,8 @@ func (this *Store) SendToECommerceExchange(body []byte, routingKey interfaces.Ev
 		routingKey.String(),                       // routing key
 		false,                                     // mandatory
 		false,                                     // immediate
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        []byte(body),
-		})
+		publishing,
+	)
 	helpers.FailOnError(err, "Failed to publish a message")
-	log.Printf(" [x] Sent %s\n", body)
+	log.Printf(" [x] Sent %s\n", publishing.Body)
 }
