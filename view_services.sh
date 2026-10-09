@@ -1,7 +1,6 @@
 #!/usr/bin/env zsh
 
 SESSION="microservices"
-SERVICES=("store" "payment" "delivery" "sales" "consumer1" "consumer2")
 
 # Attach if session already exists
 if tmux has-session -t "$SESSION" 2>/dev/null; then
@@ -13,19 +12,24 @@ fi
 # Start container services in the background
 docker compose up -d
 
-# Create session with Pane 0 for the interactive TUI / control terminal
+# 1. Row 1 (Top 50% height): TUI spanning full width (Pane 0)
 tmux new-session -d -s "$SESSION" -n "dashboard" "docker compose attach tui"
 
-# Create a pane for each service log and organize into a grid
-for service in "${SERVICES[@]}"; do
-  tmux split-window -t "$SESSION:dashboard" "docker compose logs -f $service"
-  tmux select-layout -t "$SESSION:dashboard" tiled
-done
+# 2. Row 2 (Middle 25% height): First log row start (Pane 1)
+tmux split-window -h  -t "$SESSION:dashboard.0" "docker compose logs -f store"
 
-# Focus Pane 0 (Top-left) for your TUI
+# 3. Row 3 (Bottom 25% height): Second log row start (Pane 2)
+tmux split-window -v  -t "$SESSION:dashboard.1" "docker compose logs -f sales"
+
+# 4. Split Middle Row into 3 equal columns: [ store | payment | delivery ]
+tmux split-window -v  -t "$SESSION:dashboard.1" "docker compose logs -f payment"
+tmux split-window -h  -t "$SESSION:dashboard.3" "docker compose logs -f delivery"
+
+# 5. Split Bottom Row into 3 equal columns: [ sales | consumer1 | consumer2 ]
+tmux split-window -h  -t "$SESSION:dashboard.2" "docker compose logs -f consumer1"
+tmux split-window -h  -t "$SESSION:dashboard.5" "docker compose logs -f consumer2"
+
+# Focus Pane 0 (Top TUI pane)
 tmux select-pane -t "$SESSION:dashboard.0"
-
-# (Optional) Automatically execute your TUI command here:
-# tmux send-keys -t "$SESSION:dashboard.0" "your-tui-command" C-m
 
 tmux attach-session -t "$SESSION"
