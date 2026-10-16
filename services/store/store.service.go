@@ -15,9 +15,11 @@ import (
 	"eCommerce/pkg/requests"
 	"encoding/json"
 	"log"
+	"net/http"
 	"strconv"
 	"time"
 
+	gin "github.com/gin-gonic/gin"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -86,6 +88,14 @@ func (this *Store) initProductsMap(products []mock.Product) {
 	for _, product := range products {
 		this.Products[product.UUID] = product
 	}
+}
+
+func (this *Store) GetProductsStore(context *gin.Context) {
+	var productsList []mock.Product
+	for _, product := range this.Products {
+		productsList = append(productsList, product)
+	}
+	context.IndentedJSON(http.StatusOK, productsList)
 }
 
 func (this *Store) HandleMessages(message amqp.Delivery) {
