@@ -25,7 +25,8 @@ type PaymentService struct {
 }
 
 const (
-	ApproveChancePercent = 50
+	ApproveChancePercent       = 50
+	paymentPrivateKeyDirectory = "./services/payment/payment.pem"
 )
 
 func CreatePaymentService() (*PaymentService, error) {
@@ -124,7 +125,7 @@ func (this *PaymentService) sendNotification(object any, event interfaces.Event)
 		return
 	}
 
-	privateKey, err := helpers.ReadPrivateKeyPEM("./services/payment/payment.pem")
+	privateKey, err := helpers.ReadPrivateKeyPEM(paymentPrivateKeyDirectory)
 	if err != nil {
 		log.Fatalf("Failed to read private key: %v", err)
 	}

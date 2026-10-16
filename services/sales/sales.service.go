@@ -25,6 +25,10 @@ type SalesService struct {
 	interfaces.Service
 }
 
+const (
+	salesPrivateKeyDirectory = "./services/sales/sales.pem"
+)
+
 func CreateSalesService() (*SalesService, error) {
 	var sales *SalesService = &SalesService{}
 	var err error
@@ -98,7 +102,7 @@ func (this *SalesService) sendNotification(object any, event interfaces.Event) {
 		return
 	}
 
-	privateKey, err := helpers.ReadPrivateKeyPEM("./services/sales/sales.pem")
+	privateKey, err := helpers.ReadPrivateKeyPEM(salesPrivateKeyDirectory)
 	if err != nil {
 		log.Fatalf("Failed to read private key: %v", err)
 	}

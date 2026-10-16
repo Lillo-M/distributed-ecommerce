@@ -12,7 +12,6 @@ import (
 	"eCommerce/pkg/interfaces"
 	"eCommerce/pkg/mock"
 	"eCommerce/pkg/notifications"
-	"eCommerce/pkg/requests"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -26,8 +25,12 @@ import (
 type Store struct {
 	interfaces.Service
 	Products      map[string]mock.Product
-	OrderRequests map[string]requests.CreateOrderRequest
+	OrderNotifications map[string]notifications.CreateOrderNotification
 }
+
+const (
+	storePrivateKeyDirectory = "./services/store/store.pem"
+)
 
 func CreateStore() (*Store, error) {
 	var store *Store = &Store{}
@@ -76,7 +79,7 @@ func CreateStore() (*Store, error) {
 		return nil, err
 	}
 
-	store.OrderRequests = make(map[string]requests.CreateOrderRequest)
+	store.OrderNotifications = make(map[string]notifications.CreateOrderNotification)
 
 	store.StartConsuming(store.HandleMessages)
 
@@ -121,20 +124,20 @@ func (this *Store) HandleMessages(message amqp.Delivery) {
 }
 
 func (this *Store) handleOrderCreated(message amqp.Delivery) {
-	request := requests.CreateOrderRequest{}
-	err := json.Unmarshal(message.Body, &request)
+	notification := notifications.CreateOrderNotification{}
+	err := json.Unmarshal(message.Body, &notification)
 	if err != nil {
-		log.Fatalf("Failed to decode request '%v'\n", message.Body)
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
 	log.Printf("Received an order of:\n")
-	for _, product := range request.Products {
+	for _, product := range notification.Products {
 		log.Printf("- %v %v\n", product.Quantity, strconv.Quote(this.Products[product.ProductId].Name))
 	}
 
 	var outOfStock bool = false
 
-	for _, productOrdered := range request.Products {
+	for _, productOrdered := range notification.Products {
 		storeProduct, ok := this.Products[productOrdered.ProductId]
 		if !ok {
 			log.Fatalf("invalid product id '%v'\n", productOrdered.ProductId)
@@ -148,31 +151,31 @@ func (this *Store) handleOrderCreated(message amqp.Delivery) {
 		}
 	}
 
-	this.OrderRequests[request.Id] = request
+	this.OrderNotifications[notification.Id] = notification
 
 	if outOfStock {
 		this.sendNotification(
-			notifications.StoreAvailability{OrderId: request.Id},
+			notifications.StoreAvailability{OrderId: notification.Id},
 			events.StoreUnavailableEvent,
 		)
 		return
 	}
 	this.sendNotification(
-		notifications.StoreAvailability{OrderId: request.Id},
+		notifications.StoreAvailability{OrderId: notification.Id},
 		events.OrderStoreOkEvent,
 	)
 }
 
 func (this *Store) handleOrderDeleted(message amqp.Delivery) {
-	request := requests.DeleteOrderRequest{}
-	err := json.Unmarshal(message.Body, &request)
+	notification := notifications.DeleteOrderNotification{}
+	err := json.Unmarshal(message.Body, &notification)
 	if err != nil {
-		log.Fatalf("Failed to decode request '%v'\n", message.Body)
+		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
-	log.Printf("Received an delete request for the order '%v'\n", request.OrderId)
+	log.Printf("Received an delete notification for the order '%v'\n", notification.OrderId)
 
-	order, ok := this.OrderRequests[request.OrderId]
+	order, ok := this.OrderNotifications[notification.OrderId]
 	if !ok {
 		log.Fatalf("invalid order id '%v'\n", order.Id)
 		return
@@ -183,17 +186,17 @@ func (this *Store) handleOrderDeleted(message amqp.Delivery) {
 		p.Quantity += product.Quantity
 	}
 
-	delete(this.OrderRequests, request.OrderId)
+	delete(this.OrderNotifications, notification.OrderId)
 }
 
 func (this *Store) sendNotification(object any, event interfaces.Event) {
 	notification, err := json.Marshal(object)
 	if err != nil {
-		log.Printf("failed to serialize request: %v\n", err)
+		log.Printf("failed to serialize notification: %v\n", err)
 		return
 	}
 
-	privateKey, err := helpers.ReadPrivateKeyPEM("./services/store/store.pem")
+	privateKey, err := helpers.ReadPrivateKeyPEM(storePrivateKeyDirectory)
 	if err != nil {
 		log.Fatalf("Failed to read private key: %v", err)
 	}

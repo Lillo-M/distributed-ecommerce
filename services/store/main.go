@@ -13,7 +13,5 @@ func main() {
 	router := gin.Default()
 	router.GET("/products", store.GetProductsStore)
 
-	router.RunTLS("localhost:8080",
-		"./services/store/certificate.pem",
-		"./services/store/httpPrivate.key")
+	router.Run(store.Config.StoreURL)
 }

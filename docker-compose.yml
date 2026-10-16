@@ -117,6 +117,24 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  api:
+    image: golang:alpine
+    container_name: ms-api
+    ports:
+      - "80:80"
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    tty: true
+    stdin_open: true
+    env_file: ".env"
+    command: go run ./services/api
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   rabbitmq_data:
   rabbitmq_log:

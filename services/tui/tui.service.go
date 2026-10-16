@@ -29,7 +29,6 @@ import (
 	"eCommerce/pkg/interfaces"
 	"eCommerce/pkg/mock"
 	"eCommerce/pkg/notifications"
-	"eCommerce/pkg/requests"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -40,6 +39,10 @@ type TerminalUserInterface struct {
 	Cart   []mock.Product
 	isOpen bool
 }
+
+const (
+	tuiPrivateKeyDirectory = "./services/tui/main.pem"
+)
 
 func CreateTUI() (*TerminalUserInterface, error) {
 	var tui *TerminalUserInterface = &TerminalUserInterface{}
@@ -92,12 +95,12 @@ func CreateTUI() (*TerminalUserInterface, error) {
 
 	tui.Orders = make(map[string]mock.OrderInfo)
 
-	tui.StartConsuming(tui.handleMessages)
+	tui.StartConsuming(tui.HandleMessages)
 
 	return tui, err
 }
 
-func (tui *TerminalUserInterface) handleMessages(message amqp.Delivery) {
+func (tui *TerminalUserInterface) HandleMessages(message amqp.Delivery) {
 	producerKey, err := helpers.GetProducerPublicKey(message)
 	if err != nil {
 		log.Printf("Failed to read the producer's public key routing key '%v': %v", message.RoutingKey, err)
@@ -169,15 +172,15 @@ func (tui *TerminalUserInterface) handlePaymentRefused(message amqp.Delivery) {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
-	requestBytes, err := json.Marshal(requests.DeleteOrderRequest{
+	notificationBytes, err := json.Marshal(notifications.DeleteOrderNotification{
 		OrderId: notification.OrderId,
 	})
 	if err != nil {
-		log.Printf("failed to serialize request: %v\n", err)
+		log.Printf("failed to serialize notification: %v\n", err)
 		return
 	}
 
-	tui.publishEvent(requestBytes, events.OrderDeletedEvent)
+	tui.publishEvent(notificationBytes, events.OrderDeletedEvent)
 	order, ok := tui.Orders[notification.OrderId]
 	if !ok {
 		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
@@ -210,15 +213,15 @@ func (tui *TerminalUserInterface) handleStoreUnavailable(message amqp.Delivery) 
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
-	requestBytes, err := json.Marshal(requests.DeleteOrderRequest{
+	notificationBytes, err := json.Marshal(notifications.DeleteOrderNotification{
 		OrderId: notification.OrderId,
 	})
 	if err != nil {
-		log.Printf("failed to serialize request: %v\n", err)
+		log.Printf("failed to serialize notification: %v\n", err)
 		return
 	}
 
-	tui.publishEvent(requestBytes, events.OrderDeletedEvent)
+	tui.publishEvent(notificationBytes, events.OrderDeletedEvent)
 	order, ok := tui.Orders[notification.OrderId]
 	if !ok {
 		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
@@ -533,7 +536,7 @@ func (tui *TerminalUserInterface) handleCreateCommand() {
 		return
 	}
 	orderId := uuid.New().String()
-	requestBytes, err := json.Marshal(requests.CreateOrderRequest{
+	notificationBytes, err := json.Marshal(notifications.CreateOrderNotification{
 		Id: orderId,
 		Products: func() []dtos.ProductDto {
 			productDtos := make([]dtos.ProductDto, len(tui.Cart))
@@ -544,7 +547,7 @@ func (tui *TerminalUserInterface) handleCreateCommand() {
 		}(),
 	})
 	if err != nil {
-		log.Printf("failed to serialize request: %v\n", err)
+		log.Printf("failed to serialize notification: %v\n", err)
 		return
 	}
 
@@ -558,7 +561,7 @@ func (tui *TerminalUserInterface) handleCreateCommand() {
 
 	tui.Cart = nil
 	tui.Orders[order.UUID] = order
-	tui.publishEvent(requestBytes, events.OrderCreatedEvent)
+	tui.publishEvent(notificationBytes, events.OrderCreatedEvent)
 }
 
 func (tui *TerminalUserInterface) renderOrdersTable() {
@@ -607,7 +610,7 @@ func renderProductsTable(products []mock.Product) {
 }
 
 func (tui *TerminalUserInterface) publishEvent(payload []byte, routingKey events.OrderEvent) {
-	privateKey, err := helpers.ReadPrivateKeyPEM("./services/tui/tui.pem")
+	privateKey, err := helpers.ReadPrivateKeyPEM(tuiPrivateKeyDirectory)
 	if err != nil {
 		log.Fatalf("Failed to read private key: %v", err)
 	}
