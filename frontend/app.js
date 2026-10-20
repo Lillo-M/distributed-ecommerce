@@ -295,18 +295,27 @@ function renderizarPedido(pedido) {
 
 // -----------------------------------------------------------------------------
 // Promoções — POST / DELETE /sales/register
+// O backend registra uma categoria por requisição, então enviamos uma por categoria marcada.
 // -----------------------------------------------------------------------------
 async function alterarInteresse(evento, metodo) {
     evento.preventDefault();
     const formulario = $("#form-promocoes");
     if (!formulario.reportValidity()) return;
 
-    const interesse = { Email: $("#email").value.trim(), Category: $("#categoria").value };
+    const email = $("#email").value.trim();
+    const categorias = [...document.querySelectorAll("input[name=categoria]:checked")].map((c) => c.value);
+    if (categorias.length === 0) {
+        avisar("Selecione ao menos uma categoria.", "erro");
+        return;
+    }
+
     try {
-        await api(metodo, "/sales/register", interesse);
+        await Promise.all(categorias.map((categoria) =>
+            api(metodo, "/sales/register", { Email: email, Category: categoria })));
+        const lista = categorias.join(", ");
         avisar(metodo === "POST"
-            ? `Inscrito nas promoções da categoria ${interesse.Category}.`
-            : `Interesse na categoria ${interesse.Category} cancelado.`);
+            ? `Inscrito nas promoções das categorias: ${lista}.`
+            : `Interesse cancelado nas categorias: ${lista}.`);
     } catch (erro) {
         avisar(`Não foi possível atualizar o interesse: ${erro.message}`, "erro");
     }

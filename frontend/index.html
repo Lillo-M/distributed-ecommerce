@@ -54,17 +54,17 @@
         <section id="promocoes" class="pagina" hidden>
             <h2>Promoções por e-mail</h2>
             <form id="form-promocoes" class="secao-bloco form-promocoes">
-                <p>Receba um e-mail sempre que uma categoria entrar em promoção. Cada inscrição vale para uma categoria.</p>
+                <p>Receba um e-mail sempre que uma das categorias escolhidas entrar em promoção.</p>
 
                 <label for="email">E-mail</label>
                 <input id="email" type="email" placeholder="voce@exemplo.com" required>
 
-                <label for="categoria">Categoria</label>
-                <select id="categoria">
-                    <option value="A">Categoria A</option>
-                    <option value="B">Categoria B</option>
-                    <option value="C">Categoria C</option>
-                </select>
+                <span class="rotulo">Categorias</span>
+                <div class="categorias">
+                    <label><input type="checkbox" name="categoria" value="A" checked> Categoria A</label>
+                    <label><input type="checkbox" name="categoria" value="B"> Categoria B</label>
+                    <label><input type="checkbox" name="categoria" value="C"> Categoria C</label>
+                </div>
 
                 <div class="form-botoes">
                     <button type="submit" class="btn">Inscrever</button>

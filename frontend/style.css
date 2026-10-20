@@ -342,7 +342,21 @@ input:focus, select:focus {
     gap: 8px;
 }
 .form-promocoes p { margin: 0 0 8px; }
-.form-promocoes label { font-weight: 600; font-size: 0.9rem; margin-top: 6px; }
+.form-promocoes > label,
+.form-promocoes .rotulo { font-weight: 600; font-size: 0.9rem; margin-top: 6px; }
+
+.categorias { display: flex; flex-wrap: wrap; gap: 10px; }
+.categorias label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--cor-borda);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.categorias label:has(input:checked) { border-color: var(--cor-acento); color: var(--cor-acento); font-weight: 600; }
+.categorias input { width: auto; margin: 0; accent-color: var(--cor-acento); }
 .form-botoes { display: flex; gap: 12px; margin-top: 12px; }
 
 /* ---------------------------------------------------------------------------
