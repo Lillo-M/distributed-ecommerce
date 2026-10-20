@@ -33,9 +33,10 @@ const MENSAGENS = {
 const estado = {
     produtos: [],              // catálogo vindo de GET /products
     carrinho: new Map(),       // uuid do produto -> quantidade
-    pedidos: new Map(),        // uuid do pedido -> último OrderInfo recebido (de todos os clientes)
+    pedidos: new Map(),        // uuid do pedido -> último OrderInfo recebido
     meusPedidos: carregarMeusPedidos(), // uuids dos pedidos feitos neste navegador
     abasPagamento: new Map(),  // uuid do pedido -> aba aberta aguardando a URL de checkout
+    fonteEventos: null,        // conexão SSE atual
 };
 
 // -----------------------------------------------------------------------------
@@ -179,8 +180,9 @@ async function finalizarPedido() {
         salvarMeusPedidos();
         if (aba) estado.abasPagamento.set(pedido.UUID, aba);
 
-        // o SSE pode ter entregado atualizações antes da resposta do POST
-        receberPedido(estado.pedidos.get(pedido.UUID) || pedido);
+        receberPedido(pedido);
+        // passa a acompanhar o novo pedido pelo SSE (o estado atual chega ao reconectar)
+        conectarEventos();
 
         estado.carrinho.clear();
         renderizarCarrinho();
@@ -193,10 +195,19 @@ async function finalizarPedido() {
 }
 
 // -----------------------------------------------------------------------------
-// Acompanhamento dos pedidos — SSE em GET /events
+// Acompanhamento dos pedidos — SSE em GET /events?orderId=...
+// A API só transmite os pedidos informados; a cada pedido novo a conexão é refeita
+// com a lista atualizada (ao conectar, a API envia o estado atual de cada um).
 // -----------------------------------------------------------------------------
+const MAX_PEDIDOS_ACOMPANHADOS = 50;
+
 function conectarEventos() {
-    const fonte = new EventSource(`${API_URL}/events`);
+    if (estado.fonteEventos) estado.fonteEventos.close();
+
+    const ids = estado.meusPedidos.slice(0, MAX_PEDIDOS_ACOMPANHADOS);
+    const parametros = new URLSearchParams(ids.map((id) => ["orderId", id]));
+    const fonte = new EventSource(`${API_URL}/events?${parametros}`);
+    estado.fonteEventos = fonte;
     const indicador = $("#conexao");
 
     fonte.onopen = () => {
@@ -215,7 +226,6 @@ function receberPedido(pedido) {
     const anterior = estado.pedidos.get(pedido.UUID);
     estado.pedidos.set(pedido.UUID, pedido);
 
-    // a API transmite os pedidos de todos os clientes; aqui só interessam os nossos
     if (!estado.meusPedidos.includes(pedido.UUID)) return;
 
     if (anterior && anterior.Status !== pedido.Status && MENSAGENS[pedido.Status]) {

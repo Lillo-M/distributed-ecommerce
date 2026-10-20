@@ -49,11 +49,14 @@ func (this *MainApiService) broadcastOrder(order mock.OrderInfo) {
 	}
 }
 
-// GET /events?orderId=<id>
-// mantém uma conexão SSE com o frontend notificando toda mudança de estado dos pedidos;
-// sem orderId, envia as atualizações de todos os pedidos
+// GET /events?orderId=<id>&orderId=<id>...
+// mantém uma conexão SSE com o frontend notificando toda mudança de estado
+// apenas dos pedidos daquele cliente (os informados em orderId)
 func (this *MainApiService) GetEvents(context *gin.Context) {
-	orderId := context.Query("orderId")
+	clientOrders := make(map[string]bool)
+	for _, orderId := range context.QueryArray("orderId") {
+		clientOrders[orderId] = true
+	}
 
 	client := this.subscribeSSE()
 	defer this.unsubscribeSSE(client)
@@ -65,8 +68,8 @@ func (this *MainApiService) GetEvents(context *gin.Context) {
 
 	// estado atual primeiro, para o cliente não perder eventos anteriores à conexão
 	this.ordersMutex.RLock()
-	for _, order := range this.Orders {
-		if orderId == "" || order.UUID == orderId {
+	for orderId := range clientOrders {
+		if order, ok := this.Orders[orderId]; ok {
 			context.SSEvent("order", order)
 		}
 	}
@@ -84,7 +87,7 @@ func (this *MainApiService) GetEvents(context *gin.Context) {
 			context.SSEvent("ping", time.Now().Unix())
 			return true
 		case order := <-client:
-			if orderId == "" || order.UUID == orderId {
+			if clientOrders[order.UUID] {
 				context.SSEvent("order", order)
 			}
 			return true
