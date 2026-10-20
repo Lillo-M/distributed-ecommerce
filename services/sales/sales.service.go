@@ -15,14 +15,21 @@ import (
 	"encoding/json"
 	"log"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	resend "github.com/resend/resend-go/v4"
 )
+
+type MailConsumer struct {
+	Email string
+}
 
 type SalesService struct {
 	interfaces.Service
+	MailConsumers map[string][]MailConsumer
 }
 
 const (
@@ -56,11 +63,48 @@ func CreateSalesService() (*SalesService, error) {
 		return nil, err
 	}
 
+	sales.MailConsumers = make(map[string][]MailConsumer)
+
 	return sales, nil
+}
+
+func (this *SalesService) RegisterMailConsumer(notification notifications.TrackSaleNotification) {
+	// TODO: sanitize and validate this notification (check if the category exists)
+	if this.MailConsumers[notification.Category] == nil {
+		this.MailConsumers[notification.Category] = make([]MailConsumer, 0)
+	}
+	this.MailConsumers[notification.Category] = append(this.MailConsumers[notification.Category], MailConsumer{notification.Email})
+}
+
+func (this *SalesService) UnregisterMailConsumer(notification notifications.TrackSaleNotification) {
+	// TODO: sanitize and validate this notification (check if the category exists)
+	if len(this.MailConsumers[notification.Category]) <= 0 {
+		return
+	}
+	s := slices.IndexFunc(this.MailConsumers[notification.Category],
+		func(el MailConsumer) bool {
+			return el.Email == notification.Email
+		})
+	if s == -1 {
+		return
+	}
+	this.MailConsumers[notification.Category] = append(this.MailConsumers[notification.Category][:s],
+		this.MailConsumers[notification.Category][s+1:]...)
 }
 
 func (this *SalesService) HandleMessages(message amqp.Delivery) {
 	switch message.RoutingKey {
+	case events.SaleInterest.String():
+		notification := notifications.TrackSaleNotification{}
+		err := json.Unmarshal(message.Body, &notification)
+		if err != nil {
+			log.Fatalf("Failed to decode notification '%v'\n", message.Body)
+		}
+		if notification.IsRegisting {
+			this.RegisterMailConsumer(notification)
+		} else {
+			this.UnregisterMailConsumer(notification)
+		}
 	default:
 		log.Fatalf("Unknown routing key '%v'\n", message.RoutingKey)
 	}
@@ -75,23 +119,50 @@ func (this *SalesService) generateSales() {
 			return
 		}
 		v := value.Int64()
+		var notification notifications.SaleNotification
 		switch {
 		case v < 33:
+			notification = notifications.SaleNotification{Category: strings.Split(events.SaleCategoryA.String(), ".")[2]}
 			this.sendNotification(
-				notifications.SaleNotification{Category: strings.Split(events.SaleCategoryA.String(), ".")[2]},
+				notification,
 				events.SaleCategoryA,
 			)
 		case v >= 33 && v < 67:
+			notification = notifications.SaleNotification{Category: strings.Split(events.SaleCategoryB.String(), ".")[2]}
 			this.sendNotification(
-				notifications.SaleNotification{Category: strings.Split(events.SaleCategoryB.String(), ".")[2]},
+				notification,
 				events.SaleCategoryB,
 			)
 		case v >= 67 && v < 100:
+			notification = notifications.SaleNotification{Category: strings.Split(events.SaleCategoryC.String(), ".")[2]}
 			this.sendNotification(
-				notifications.SaleNotification{Category: strings.Split(events.SaleCategoryC.String(), ".")[2]},
+				notification,
 				events.SaleCategoryC,
 			)
+		default:
+			log.Fatalf("Invalid rand output")
 		}
+		this.NotifyMailConsumers(notification)
+	}
+}
+
+func (this *SalesService) NotifyMailConsumers(notification notifications.SaleNotification) {
+	client := resend.NewClient(this.Config.EMailApiKey)
+
+	for _, consumer := range this.MailConsumers[notification.Category] {
+		params := &resend.SendEmailRequest{
+			From:    "onboarding@resend.dev",
+			To:      []string{consumer.Email},
+			Subject: "Sale " + "Category " + notification.Category,
+			Html:    "<p>The category <strong>" + notification.Category + "</strong> is on sale!</p>",
+		}
+
+		sent, err := client.Emails.Send(params)
+		if err != nil {
+			log.Fatalf("failed to send email: %v", err)
+		}
+
+		log.Printf("email sent: %s", sent.Id)
 	}
 }
 

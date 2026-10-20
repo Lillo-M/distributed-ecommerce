@@ -11,6 +11,7 @@ type Config struct {
 	RabbitMQURL string
 	StoreURL    string
 	ApiURL      string
+	EMailApiKey string
 }
 
 func Load() (*Config, error) {
@@ -20,6 +21,7 @@ func Load() (*Config, error) {
 		RabbitMQURL: os.Getenv("RABBITMQ_URL"),
 		StoreURL:    os.Getenv("STORE_URL"),
 		ApiURL:      os.Getenv("API_URL"),
+		EMailApiKey: os.Getenv("EMAIL_API_KEY"),
 	}
 
 	if cfg.RabbitMQURL == "" {
@@ -32,6 +34,10 @@ func Load() (*Config, error) {
 
 	if cfg.ApiURL == "" {
 		return nil, fmt.Errorf("API_URL is required")
+	}
+
+	if cfg.EMailApiKey == "" {
+		return nil, fmt.Errorf("EMAIL_API_KEY is required")
 	}
 
 	return cfg, nil
