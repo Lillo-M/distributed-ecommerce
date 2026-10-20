@@ -117,6 +117,8 @@ services:
   tui:
     image: golang:alpine
     container_name: ms-tui
+    # cliente de terminal do Trab2, substituído pelo frontend web; só sobe com --profile trab2
+    profiles: ["trab2"]
     restart: on-failure
     volumes:
       - .:/app
