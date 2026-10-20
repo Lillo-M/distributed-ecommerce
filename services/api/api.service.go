@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"uuid"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,8 @@ type MainApiService struct {
 	httpClient *http.Client
 	Orders     map[string]mock.OrderInfo
 	Products   []mock.Product
+	// protege Orders: acessado pelos handlers do Gin e pela goroutine consumidora do RabbitMQ
+	ordersMutex sync.RWMutex
 }
 
 const (
@@ -61,6 +64,7 @@ func CreateMainApiService() (*MainApiService, error) {
 		events.OrderSentEvent.String(),
 		events.OrderStoreOkEvent.String(),
 		events.StoreUnavailableEvent.String(),
+		events.PaymentEventCheckoutCreated.String(),
 	}
 
 	err = mainApi.BindRoutingKeys(routingKeys, ecommerceExchange)
@@ -102,10 +106,26 @@ func (this *MainApiService) HttpGet(path string) ([]byte, error) {
 
 func (this *MainApiService) GetOrders(context *gin.Context) {
 	var orderList []mock.OrderInfo
+	this.ordersMutex.RLock()
 	for _, order := range this.Orders {
 		orderList = append(orderList, order)
 	}
+	this.ordersMutex.RUnlock()
 	context.IndentedJSON(http.StatusOK, orderList)
+}
+
+func (this *MainApiService) GetOrder(context *gin.Context) {
+	this.ordersMutex.RLock()
+	order, ok := this.Orders[context.Param("id")]
+	this.ordersMutex.RUnlock()
+	if !ok {
+		context.IndentedJSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "order not found",
+		})
+		return
+	}
+	context.IndentedJSON(http.StatusOK, order)
 }
 
 // (0,1) listar produtos disponíveis em estoque;
@@ -206,11 +226,14 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 		Status:   mock.OrderStatusCreated,
 	}
 
+	this.ordersMutex.Lock()
 	this.Orders[order.UUID] = order
+	this.ordersMutex.Unlock()
 
 	this.publishEvent(notificationBytes, events.OrderCreatedEvent)
 
-	context.IndentedJSON(http.StatusCreated, gin.H{})
+	// retorna o pedido criado (com o UUID) para o frontend acompanhar o status
+	context.IndentedJSON(http.StatusCreated, order)
 }
 
 // (0,1) registrar interesse, informando o e-mail, em receber notificação sobre promoções de categorias;

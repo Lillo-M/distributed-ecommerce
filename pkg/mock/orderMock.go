@@ -20,5 +20,6 @@ const (
 
 type OrderInfo struct {
 	Order
-	Status OrderStatus
+	Status      OrderStatus
+	CheckoutUrl string
 }
