@@ -71,6 +71,7 @@ func (this *MainApiService) handlePaymentApproved(message amqp.Delivery) {
 	}
 	order.Status = mock.OrderStatusPaymentApproved
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleOrderSent(message amqp.Delivery) {
@@ -89,6 +90,7 @@ func (this *MainApiService) handleOrderSent(message amqp.Delivery) {
 	}
 	order.Status = mock.OrderStatusSent
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handlePaymentRefused(message amqp.Delivery) {
@@ -116,6 +118,7 @@ func (this *MainApiService) handlePaymentRefused(message amqp.Delivery) {
 	}
 	order.Status = mock.OrderStatusPaymentDenied
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleStoreOk(message amqp.Delivery) {
@@ -134,6 +137,7 @@ func (this *MainApiService) handleStoreOk(message amqp.Delivery) {
 	}
 	order.Status = mock.OrderStatusStockReserved
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleStoreUnavailable(message amqp.Delivery) {
@@ -161,6 +165,7 @@ func (this *MainApiService) handleStoreUnavailable(message amqp.Delivery) {
 	}
 	order.Status = mock.OrderStatusOutOfStock
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleCheckoutCreated(message amqp.Delivery) {
@@ -180,6 +185,7 @@ func (this *MainApiService) handleCheckoutCreated(message amqp.Delivery) {
 	}
 	order.CheckoutUrl = notification.CheckoutUrl
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) sendNotification(object any, event interfaces.Event) {

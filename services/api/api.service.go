@@ -24,6 +24,9 @@ type MainApiService struct {
 	Products   []mock.Product
 	// protege Orders: acessado pelos handlers do Gin e pela goroutine consumidora do RabbitMQ
 	ordersMutex sync.RWMutex
+	// clientes SSE conectados (ver api.sse.go)
+	sseClients map[chan mock.OrderInfo]struct{}
+	sseMutex   sync.Mutex
 }
 
 const (
@@ -229,6 +232,7 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 	this.ordersMutex.Lock()
 	this.Orders[order.UUID] = order
 	this.ordersMutex.Unlock()
+	this.broadcastOrder(order)
 
 	this.publishEvent(notificationBytes, events.OrderCreatedEvent)
 
