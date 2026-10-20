@@ -61,6 +61,25 @@ func CreateMainApiService() (*MainApiService, error) {
 		return nil, err
 	}
 
+	// a API publica o interesse em promoções na exchange sales; publicar numa exchange
+	// inexistente (MS Promoções ainda não subiu) faz o RabbitMQ fechar o canal da API
+	var salesExchange = exchanges.GetSalesExchangeInfo()
+	err = mainApi.Channel.ExchangeDeclare(
+		salesExchange.Name, // name
+		salesExchange.Type, // type
+		false,              // durability
+		false,              // auto-deleted
+		false,              // internal
+		false,              // no-wait
+		nil,                // arguments
+	)
+
+	if err != nil {
+		helpers.LogErrorMessage(err, "Failed to declare a exchange")
+		mainApi.CloseRMQChannel()
+		return nil, err
+	}
+
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
 		events.PaymentEventRefused.String(),
