@@ -13,6 +13,8 @@ func main() {
 	router := gin.Default()
 	router.GET("/products", api.GetProducts)
 	router.POST("/orders", api.PostOrder)
+	router.POST("/sales/register", api.PostRegisterEMail)
+	router.DELETE("/sales/register", api.DeleteRegisterEMail)
 
 	router.Run(api.Config.ApiURL)
 }

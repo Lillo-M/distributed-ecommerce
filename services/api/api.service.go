@@ -152,5 +152,59 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 }
 
 // (0,1) registrar interesse, informando o e-mail, em receber notificação sobre promoções de categorias;
+func (this *MainApiService) PostRegisterEMail(context *gin.Context) {
+	var request requests.TrackSalesRequest
+
+	if err := context.BindJSON(&request); err != nil {
+		context.IndentedJSON(http.StatusBadRequest, request)
+		return
+	}
+
+	notification := notifications.TrackSaleNotification{
+		IsRegisting: true,
+		Category:    request.Category,
+		Email:       request.Email,
+	}
+	notificationBytes, err := json.Marshal(notification)
+	if err != nil {
+		context.IndentedJSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "couldn't serialize notification...",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	this.publishSaleEvent(notificationBytes, events.SaleInterest)
+
+	context.IndentedJSON(http.StatusCreated, gin.H{})
+}
 
 // (0,1) cancelar interesse em receber e-mail sobre.
+func (this *MainApiService) DeleteRegisterEMail(context *gin.Context) {
+	var request requests.TrackSalesRequest
+
+	if err := context.BindJSON(&request); err != nil {
+		context.IndentedJSON(http.StatusBadRequest, request)
+		return
+	}
+
+	notification := notifications.TrackSaleNotification{
+		IsRegisting: false,
+		Category:    request.Category,
+		Email:       request.Email,
+	}
+	notificationBytes, err := json.Marshal(notification)
+	if err != nil {
+		context.IndentedJSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "couldn't serialize notification...",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	this.publishSaleEvent(notificationBytes, events.SaleInterest)
+
+	context.IndentedJSON(http.StatusOK, gin.H{})
+}

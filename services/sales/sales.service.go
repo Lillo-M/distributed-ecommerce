@@ -63,6 +63,19 @@ func CreateSalesService() (*SalesService, error) {
 		return nil, err
 	}
 
+	routingKeys := []string{
+		events.SaleInterest.String(),
+	}
+
+	err = sales.BindRoutingKeys(routingKeys, salesExchange)
+	if err != nil {
+		helpers.LogErrorMessage(err, "Failed to declare a exchange")
+		sales.CloseRMQChannel()
+		return nil, err
+	}
+
+	sales.StartConsuming(sales.HandleMessages)
+
 	sales.MailConsumers = make(map[string][]MailConsumer)
 
 	return sales, nil
@@ -95,6 +108,7 @@ func (this *SalesService) UnregisterMailConsumer(notification notifications.Trac
 func (this *SalesService) HandleMessages(message amqp.Delivery) {
 	switch message.RoutingKey {
 	case events.SaleInterest.String():
+		log.Printf("Received an track sale: %s", message.Body)
 		notification := notifications.TrackSaleNotification{}
 		err := json.Unmarshal(message.Body, &notification)
 		if err != nil {
@@ -151,7 +165,7 @@ func (this *SalesService) NotifyMailConsumers(notification notifications.SaleNot
 
 	for _, consumer := range this.MailConsumers[notification.Category] {
 		params := &resend.SendEmailRequest{
-			From:    "onboarding@resend.dev",
+			From:    "DistributedECommerce <onboarding@resend.dev>",
 			To:      []string{consumer.Email},
 			Subject: "Sale " + "Category " + notification.Category,
 			Html:    "<p>The category <strong>" + notification.Category + "</strong> is on sale!</p>",
