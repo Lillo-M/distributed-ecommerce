@@ -25,6 +25,8 @@ type DeliveryService struct {
 const (
 	ApproveChancePercent       = 50
 	paymentPrivateKeyDirectory = "./services/delivery/delivery.pem"
+	// tempo simulado para emitir a nota fiscal e despachar o produto
+	dispatchDelay = time.Second
 )
 
 func CreateDeliveryService() (*DeliveryService, error) {
@@ -97,6 +99,13 @@ func (this *DeliveryService) handlePaymentApproved(message amqp.Delivery) {
 	if err != nil {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
+
+	// simula a emissão da nota fiscal e o despacho do produto
+	invoiceNumber := time.Now().UnixMilli()
+	log.Printf("Nota fiscal NF-%d emitida para o pedido '%v'\n", invoiceNumber, notification.OrderId)
+	time.Sleep(dispatchDelay)
+	log.Printf("Pedido '%v' despachado (NF-%d)\n", notification.OrderId, invoiceNumber)
+
 	this.sendNotification(
 		notifications.DeliveryStatus{OrderId: notification.OrderId},
 		events.OrderSentEvent,
