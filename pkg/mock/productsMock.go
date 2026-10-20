@@ -27,3 +27,16 @@ func GetProducts(filePath string) ([]Product, error) {
 
 	return products, nil
 }
+
+func SaveProducts(filePath string, products []Product) error {
+	data, err := json.MarshalIndent(products, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to encode json: %w", err)
+	}
+
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
