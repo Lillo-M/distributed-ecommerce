@@ -11,6 +11,7 @@ type Config struct {
 	RabbitMQURL    string
 	StoreURL       string
 	ApiURL         string
+	EMailApiKey    string
 	PaymentURL     string
 	PaymentMockURL string
 }
@@ -22,6 +23,7 @@ func Load() (*Config, error) {
 		RabbitMQURL:    os.Getenv("RABBITMQ_URL"),
 		StoreURL:       os.Getenv("STORE_URL"),
 		ApiURL:         os.Getenv("API_URL"),
+		EMailApiKey:    os.Getenv("EMAIL_API_KEY"),
 		PaymentURL:     os.Getenv("PAYMENT_URL"),
 		PaymentMockURL: os.Getenv("PAYMENT_MOCK_URL"),
 	}
@@ -42,6 +44,10 @@ func Load() (*Config, error) {
 	}
 	if cfg.PaymentMockURL == "" {
 		return nil, fmt.Errorf("PAYMENT_MOCK_URL is required")
+	}
+
+	if cfg.EMailApiKey == "" {
+		return nil, fmt.Errorf("EMAIL_API_KEY is required")
 	}
 
 	return cfg, nil

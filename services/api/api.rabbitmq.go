@@ -178,6 +178,21 @@ func (this *MainApiService) sendNotification(object any, event interfaces.Event)
 	)
 }
 
+func (this *MainApiService) SendToSalesExchange(publishing amqp.Publishing, routingKey interfaces.Event) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var err = this.Channel.PublishWithContext(ctx,
+		exchanges.GetSalesExchangeInfo().Name, // exchange
+		routingKey.String(),                   // routing key
+		false,                                 // mandatory
+		false,                                 // immediate
+		publishing,
+	)
+	helpers.FailOnError(err, "Failed to publish a message")
+	log.Printf(" [x] Sent %s\n", publishing.Body)
+}
+
 func (this *MainApiService) SendToECommerceExchange(publishing amqp.Publishing, routingKey interfaces.Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -207,6 +222,29 @@ func (this *MainApiService) publishEvent(payload []byte, routingKey events.Order
 	}
 
 	this.SendToECommerceExchange(
+		amqp.Publishing{
+			ContentType: "application/json",
+			Headers:     amqp.Table{"x-signature": signature},
+			Body:        payload,
+		},
+		routingKey,
+	)
+}
+
+func (this *MainApiService) publishSaleEvent(payload []byte, routingKey events.SaleEvent) {
+	privateKey, err := helpers.ReadPrivateKeyPEM("./services/api/main.pem")
+	if err != nil {
+		log.Fatalf("Failed to read private key: %v", err)
+	}
+
+	checksum := sha256.Sum256(payload)
+
+	signature, err := rsa.SignPSS(crand.Reader, privateKey, crypto.SHA256, checksum[:], nil)
+	if err != nil {
+		log.Fatalf("Failed to sign payload: %v", err)
+	}
+
+	this.SendToSalesExchange(
 		amqp.Publishing{
 			ContentType: "application/json",
 			Headers:     amqp.Table{"x-signature": signature},

@@ -20,6 +20,7 @@ type MainApiService struct {
 	interfaces.Service
 	httpClient *http.Client
 	Orders     map[string]mock.OrderInfo
+	Products   []mock.Product
 }
 
 const (
@@ -56,6 +57,10 @@ func CreateMainApiService() (*MainApiService, error) {
 
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
+		events.PaymentEventRefused.String(),
+		events.OrderSentEvent.String(),
+		events.OrderStoreOkEvent.String(),
+		events.StoreUnavailableEvent.String(),
 	}
 
 	err = mainApi.BindRoutingKeys(routingKeys, ecommerceExchange)
@@ -71,6 +76,8 @@ func CreateMainApiService() (*MainApiService, error) {
 		mainApi.CloseRMQChannel()
 		return nil, err
 	}
+
+	mainApi.Orders = make(map[string]mock.OrderInfo)
 
 	mainApi.StartConsuming(mainApi.HandleMessages)
 
@@ -93,10 +100,17 @@ func (this *MainApiService) HttpGet(path string) ([]byte, error) {
 	return body, err
 }
 
+func (this *MainApiService) GetOrders(context *gin.Context) {
+	var orderList []mock.OrderInfo
+	for _, order := range this.Orders {
+		orderList = append(orderList, order)
+	}
+	context.IndentedJSON(http.StatusOK, orderList)
+}
+
 // (0,1) listar produtos disponíveis em estoque;
 func (this *MainApiService) GetProducts(context *gin.Context) {
-	var productsList []mock.Product
-	data, err := this.HttpGet("http://" + this.Config.StoreURL + "/products")
+	productsList, err := this.getStoreProducts()
 	if err != nil {
 		context.IndentedJSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -106,17 +120,22 @@ func (this *MainApiService) GetProducts(context *gin.Context) {
 		return
 	}
 
-	err = json.Unmarshal(data, &productsList)
+	context.IndentedJSON(http.StatusOK, productsList)
+}
+
+func (this *MainApiService) getStoreProducts() ([]mock.Product, error) {
+	var productsList []mock.Product
+	data, err := this.HttpGet("http://" + this.Config.StoreURL + "/products")
 	if err != nil {
-		context.IndentedJSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "oh fu...",
-			"error":   err.Error(),
-		})
-		return
+		return nil, err
 	}
 
-	context.IndentedJSON(http.StatusOK, productsList)
+	err = json.Unmarshal(data, &productsList)
+	if err != nil {
+		return nil, err
+	}
+
+	return productsList, nil
 }
 
 // (0,1) criar pedidos;
@@ -144,7 +163,50 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 		return
 	}
 
-	// TODO: hold orders state
+	if this.Products == nil {
+		productsList, err := this.getStoreProducts()
+		if err != nil {
+			context.IndentedJSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "oh shi...",
+				"error":   err.Error(),
+			})
+			return
+		}
+		this.Products = productsList
+	}
+
+	// 1. Initialize a slice to hold the combined products
+	orderProducts := make([]mock.Product, 0, len(request.Products))
+
+	// 2. Loop through the incoming DTO items
+	for _, dtoProduct := range request.Products {
+
+		// 3. Find the matching original product in your catalog/list
+		for _, originalProduct := range this.Products { // Replace with your actual products list variable
+			if originalProduct.UUID == dtoProduct.ProductId {
+
+				// 4. Create the new instance combining DTO (Quantity) + Original (Name, Price, Id)
+				orderProducts = append(orderProducts, mock.Product{
+					UUID:     originalProduct.UUID,
+					Name:     originalProduct.Name,
+					Price:    originalProduct.Price,
+					Quantity: dtoProduct.Quantity,
+				})
+
+				break // Found the match, stop searching the catalog for this item
+			}
+		}
+	}
+
+	// 5. Assign the finalized slice to your OrderInfo
+	order := mock.OrderInfo{
+		UUID:     notification.Id,
+		Products: orderProducts,
+		Status:   mock.OrderStatusCreated,
+	}
+
+	this.Orders[order.UUID] = order
 
 	this.publishEvent(notificationBytes, events.OrderCreatedEvent)
 
@@ -152,5 +214,59 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 }
 
 // (0,1) registrar interesse, informando o e-mail, em receber notificação sobre promoções de categorias;
+func (this *MainApiService) PostRegisterEMail(context *gin.Context) {
+	var request requests.TrackSalesRequest
+
+	if err := context.BindJSON(&request); err != nil {
+		context.IndentedJSON(http.StatusBadRequest, request)
+		return
+	}
+
+	notification := notifications.TrackSaleNotification{
+		IsRegisting: true,
+		Category:    request.Category,
+		Email:       request.Email,
+	}
+	notificationBytes, err := json.Marshal(notification)
+	if err != nil {
+		context.IndentedJSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "couldn't serialize notification...",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	this.publishSaleEvent(notificationBytes, events.SaleInterest)
+
+	context.IndentedJSON(http.StatusCreated, gin.H{})
+}
 
 // (0,1) cancelar interesse em receber e-mail sobre.
+func (this *MainApiService) DeleteRegisterEMail(context *gin.Context) {
+	var request requests.TrackSalesRequest
+
+	if err := context.BindJSON(&request); err != nil {
+		context.IndentedJSON(http.StatusBadRequest, request)
+		return
+	}
+
+	notification := notifications.TrackSaleNotification{
+		IsRegisting: false,
+		Category:    request.Category,
+		Email:       request.Email,
+	}
+	notificationBytes, err := json.Marshal(notification)
+	if err != nil {
+		context.IndentedJSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "couldn't serialize notification...",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	this.publishSaleEvent(notificationBytes, events.SaleInterest)
+
+	context.IndentedJSON(http.StatusOK, gin.H{})
+}

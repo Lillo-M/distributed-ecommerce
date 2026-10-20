@@ -7,6 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/joho/godotenv v1.5.1
 	github.com/rabbitmq/amqp091-go v1.14.0
+	github.com/resend/resend-go/v4 v4.9.0
 )
 
 require (
