@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Distributed eCommerce</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="header-topo">
+            <h1 class="logo">Distributed <span>eCommerce</span></h1>
+            <!-- Estado da conexão SSE com o API Gateway -->
+            <span id="conexao" class="conexao" title="Conexão SSE com o API Gateway">Conectando…</span>
+        </div>
+        <nav>
+            <a href="#catalogo">Catálogo</a>
+            <a href="#pedidos">Pedidos <span id="contador-pedidos" class="contador" hidden></span></a>
+            <a href="#promocoes">Promoções</a>
+        </nav>
+    </header>
+
+    <main>
+        <!-- Catálogo: produtos (GET /products) + carrinho (POST /orders) -->
+        <section id="catalogo" class="pagina">
+            <div class="catalogo-layout">
+                <div>
+                    <h2>Catálogo</h2>
+                    <div id="produtos" class="grade-produtos">
+                        <p class="vazio">Carregando produtos…</p>
+                    </div>
+                </div>
+
+                <aside class="secao-bloco carrinho">
+                    <h3>Carrinho</h3>
+                    <ul id="carrinho-itens" class="carrinho-itens"></ul>
+                    <p class="carrinho-total">Total <strong id="carrinho-total">R$ 0,00</strong></p>
+                    <button id="btn-finalizar" class="btn" disabled>Finalizar pedido</button>
+                    <p class="dica">O pagamento abre em uma nova aba assim que o estoque for confirmado.</p>
+                </aside>
+            </div>
+        </section>
+
+        <!-- Pedidos: status em tempo real recebido via SSE (GET /events) -->
+        <section id="pedidos" class="pagina" hidden>
+            <h2>Meus pedidos</h2>
+            <div id="lista-pedidos">
+                <p class="vazio">Nenhum pedido feito neste navegador ainda.</p>
+            </div>
+        </section>
+
+        <!-- Promoções: registrar / cancelar interesse (POST e DELETE /sales/register) -->
+        <section id="promocoes" class="pagina" hidden>
+            <h2>Promoções por e-mail</h2>
+            <form id="form-promocoes" class="secao-bloco form-promocoes">
+                <p>Receba um e-mail sempre que uma categoria entrar em promoção. Cada inscrição vale para uma categoria.</p>
+
+                <label for="email">E-mail</label>
+                <input id="email" type="email" placeholder="voce@exemplo.com" required>
+
+                <label for="categoria">Categoria</label>
+                <select id="categoria">
+                    <option value="A">Categoria A</option>
+                    <option value="B">Categoria B</option>
+                    <option value="C">Categoria C</option>
+                </select>
+
+                <div class="form-botoes">
+                    <button type="submit" class="btn">Inscrever</button>
+                    <button type="button" id="btn-cancelar-interesse" class="btn btn-secundario">Cancelar interesse</button>
+                </div>
+            </form>
+        </section>
+    </main>
+
+    <footer>
+        <p>Sistemas Distribuídos · UTFPR · Trabalho 3 (REST, MOM e SSE)</p>
+    </footer>
+
+    <div id="toasts" class="toasts"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

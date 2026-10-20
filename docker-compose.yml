@@ -148,6 +148,14 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  frontend:
+    image: nginx:alpine
+    container_name: frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+
 volumes:
   rabbitmq_data:
   rabbitmq_log:
