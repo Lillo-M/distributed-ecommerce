@@ -45,6 +45,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  paymentmock:
+    image: golang:alpine
+    container_name: paymentmock
+    ports:
+      - "9000:9000"
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/paymentmock
+
   delivery:
     image: golang:alpine
     container_name: ms-delivery
