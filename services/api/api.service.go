@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"uuid"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,11 @@ type MainApiService struct {
 	httpClient *http.Client
 	Orders     map[string]mock.OrderInfo
 	Products   []mock.Product
+	// protege Orders: acessado pelos handlers do Gin e pela goroutine consumidora do RabbitMQ
+	ordersMutex sync.RWMutex
+	// clientes SSE conectados (ver api.sse.go)
+	sseClients map[chan mock.OrderInfo]struct{}
+	sseMutex   sync.Mutex
 }
 
 const (
@@ -55,12 +61,32 @@ func CreateMainApiService() (*MainApiService, error) {
 		return nil, err
 	}
 
+	// a API publica o interesse em promoções na exchange sales; publicar numa exchange
+	// inexistente (MS Promoções ainda não subiu) faz o RabbitMQ fechar o canal da API
+	var salesExchange = exchanges.GetSalesExchangeInfo()
+	err = mainApi.Channel.ExchangeDeclare(
+		salesExchange.Name, // name
+		salesExchange.Type, // type
+		false,              // durability
+		false,              // auto-deleted
+		false,              // internal
+		false,              // no-wait
+		nil,                // arguments
+	)
+
+	if err != nil {
+		helpers.LogErrorMessage(err, "Failed to declare a exchange")
+		mainApi.CloseRMQChannel()
+		return nil, err
+	}
+
 	routingKeys := []string{
 		events.PaymentEventApproved.String(),
 		events.PaymentEventRefused.String(),
 		events.OrderSentEvent.String(),
 		events.OrderStoreOkEvent.String(),
 		events.StoreUnavailableEvent.String(),
+		events.PaymentEventCheckoutCreated.String(),
 	}
 
 	err = mainApi.BindRoutingKeys(routingKeys, ecommerceExchange)
@@ -102,10 +128,26 @@ func (this *MainApiService) HttpGet(path string) ([]byte, error) {
 
 func (this *MainApiService) GetOrders(context *gin.Context) {
 	var orderList []mock.OrderInfo
+	this.ordersMutex.RLock()
 	for _, order := range this.Orders {
 		orderList = append(orderList, order)
 	}
+	this.ordersMutex.RUnlock()
 	context.IndentedJSON(http.StatusOK, orderList)
+}
+
+func (this *MainApiService) GetOrder(context *gin.Context) {
+	this.ordersMutex.RLock()
+	order, ok := this.Orders[context.Param("id")]
+	this.ordersMutex.RUnlock()
+	if !ok {
+		context.IndentedJSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "order not found",
+		})
+		return
+	}
+	context.IndentedJSON(http.StatusOK, order)
 }
 
 // (0,1) listar produtos disponíveis em estoque;
@@ -206,11 +248,15 @@ func (this *MainApiService) PostOrder(context *gin.Context) {
 		Status:   mock.OrderStatusCreated,
 	}
 
+	this.ordersMutex.Lock()
 	this.Orders[order.UUID] = order
+	this.ordersMutex.Unlock()
+	this.broadcastOrder(order)
 
 	this.publishEvent(notificationBytes, events.OrderCreatedEvent)
 
-	context.IndentedJSON(http.StatusCreated, gin.H{})
+	// retorna o pedido criado (com o UUID) para o frontend acompanhar o status
+	context.IndentedJSON(http.StatusCreated, order)
 }
 
 // (0,1) registrar interesse, informando o e-mail, em receber notificação sobre promoções de categorias;

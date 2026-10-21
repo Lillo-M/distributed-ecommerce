@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -30,11 +31,21 @@ type MailConsumer struct {
 type SalesService struct {
 	interfaces.Service
 	MailConsumers map[string][]MailConsumer
+	// protege MailConsumers: alterado pelo consumidor RabbitMQ e lido pelo gerador de promoções
+	mailConsumersMutex sync.RWMutex
 }
 
 const (
 	salesPrivateKeyDirectory = "./services/sales/sales.pem"
+	salesInterval            = 30 * time.Second
 )
+
+// categorias existentes, derivadas das routing keys Sale.Category.{A,B,C}
+var saleCategories = []string{
+	strings.Split(events.SaleCategoryA.String(), ".")[2],
+	strings.Split(events.SaleCategoryB.String(), ".")[2],
+	strings.Split(events.SaleCategoryC.String(), ".")[2],
+}
 
 func CreateSalesService() (*SalesService, error) {
 	var sales *SalesService = &SalesService{}
@@ -74,15 +85,31 @@ func CreateSalesService() (*SalesService, error) {
 		return nil, err
 	}
 
-	sales.StartConsuming(sales.HandleMessages)
-
+	// o mapa precisa existir antes do consumidor começar a receber inscrições
 	sales.MailConsumers = make(map[string][]MailConsumer)
+
+	sales.StartConsuming(sales.HandleMessages)
 
 	return sales, nil
 }
 
 func (this *SalesService) RegisterMailConsumer(notification notifications.TrackSaleNotification) {
 	// TODO: sanitize and validate this notification (check if the category exists)
+	this.mailConsumersMutex.Lock()
+	defer this.mailConsumersMutex.Unlock()
+
+	if !slices.Contains(saleCategories, notification.Category) {
+		log.Printf("Unknown sale category '%v', ignoring interest of '%v'\n", notification.Category, notification.Email)
+		return
+	}
+	alreadyRegistered := slices.ContainsFunc(this.MailConsumers[notification.Category],
+		func(el MailConsumer) bool {
+			return el.Email == notification.Email
+		})
+	if alreadyRegistered {
+		return
+	}
+
 	if this.MailConsumers[notification.Category] == nil {
 		this.MailConsumers[notification.Category] = make([]MailConsumer, 0)
 	}
@@ -91,6 +118,9 @@ func (this *SalesService) RegisterMailConsumer(notification notifications.TrackS
 
 func (this *SalesService) UnregisterMailConsumer(notification notifications.TrackSaleNotification) {
 	// TODO: sanitize and validate this notification (check if the category exists)
+	this.mailConsumersMutex.Lock()
+	defer this.mailConsumersMutex.Unlock()
+
 	if len(this.MailConsumers[notification.Category]) <= 0 {
 		return
 	}
@@ -126,7 +156,7 @@ func (this *SalesService) HandleMessages(message amqp.Delivery) {
 
 func (this *SalesService) generateSales() {
 	for true {
-		time.Sleep(time.Second)
+		time.Sleep(salesInterval)
 		value, err := rand.Int(rand.Reader, big.NewInt(100))
 		if err != nil {
 			log.Fatalf("Failed to generate a random int '%v'\n", err)
@@ -163,7 +193,12 @@ func (this *SalesService) generateSales() {
 func (this *SalesService) NotifyMailConsumers(notification notifications.SaleNotification) {
 	client := resend.NewClient(this.Config.EMailApiKey)
 
-	for _, consumer := range this.MailConsumers[notification.Category] {
+	// copia a lista para não segurar o lock durante as chamadas HTTP ao Resend
+	this.mailConsumersMutex.RLock()
+	consumers := slices.Clone(this.MailConsumers[notification.Category])
+	this.mailConsumersMutex.RUnlock()
+
+	for _, consumer := range consumers {
 		params := &resend.SendEmailRequest{
 			From:    "DistributedECommerce <onboarding@resend.dev>",
 			To:      []string{consumer.Email},
@@ -173,7 +208,9 @@ func (this *SalesService) NotifyMailConsumers(notification notifications.SaleNot
 
 		sent, err := client.Emails.Send(params)
 		if err != nil {
-			log.Fatalf("failed to send email: %v", err)
+			// uma falha no envio não pode derrubar o serviço (e perder os interesses cadastrados)
+			log.Printf("failed to send email to '%v': %v", consumer.Email, err)
+			continue
 		}
 
 		log.Printf("email sent: %s", sent.Id)

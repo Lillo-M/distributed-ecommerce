@@ -8,20 +8,24 @@ import (
 )
 
 type Config struct {
-	RabbitMQURL string
-	StoreURL    string
-	ApiURL      string
-	EMailApiKey string
+	RabbitMQURL    string
+	StoreURL       string
+	ApiURL         string
+	EMailApiKey    string
+	PaymentURL     string
+	PaymentMockURL string
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		RabbitMQURL: os.Getenv("RABBITMQ_URL"),
-		StoreURL:    os.Getenv("STORE_URL"),
-		ApiURL:      os.Getenv("API_URL"),
-		EMailApiKey: os.Getenv("EMAIL_API_KEY"),
+		RabbitMQURL:    os.Getenv("RABBITMQ_URL"),
+		StoreURL:       os.Getenv("STORE_URL"),
+		ApiURL:         os.Getenv("API_URL"),
+		EMailApiKey:    os.Getenv("EMAIL_API_KEY"),
+		PaymentURL:     os.Getenv("PAYMENT_URL"),
+		PaymentMockURL: os.Getenv("PAYMENT_MOCK_URL"),
 	}
 
 	if cfg.RabbitMQURL == "" {
@@ -34,6 +38,12 @@ func Load() (*Config, error) {
 
 	if cfg.ApiURL == "" {
 		return nil, fmt.Errorf("API_URL is required")
+	}
+	if cfg.PaymentURL == "" {
+		return nil, fmt.Errorf("PAYMENT_URL is required")
+	}
+	if cfg.PaymentMockURL == "" {
+		return nil, fmt.Errorf("PAYMENT_MOCK_URL is required")
 	}
 
 	if cfg.EMailApiKey == "" {

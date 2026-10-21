@@ -112,6 +112,8 @@ func GetProducerPublicKey(message amqp.Delivery) (*rsa.PublicKey, error) {
 		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/payment.pem")
 	case events.PaymentEventRefused.String():
 		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/payment.pem")
+	case events.PaymentEventCheckoutCreated.String():
+		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/payment.pem")
 	case events.OrderCreatedEvent.String():
 		producerKey, err = ReadPublicKeyPEM("./pkg/public-keys/main.pem")
 	case events.OrderDeletedEvent.String():

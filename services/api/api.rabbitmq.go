@@ -47,6 +47,9 @@ func (this *MainApiService) HandleMessages(message amqp.Delivery) {
 	case events.StoreUnavailableEvent.String():
 		this.handleStoreUnavailable(message)
 		log.Printf("Received a store unavailable: %s", message.Body)
+	case events.PaymentEventCheckoutCreated.String():
+		this.handleCheckoutCreated(message)
+		log.Printf("Received a checkout created: %s", message.Body)
 	default:
 		log.Printf("routing key '%q' unkown\n", message.RoutingKey)
 	}
@@ -59,13 +62,16 @@ func (this *MainApiService) handlePaymentApproved(message amqp.Delivery) {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
 	order, ok := this.Orders[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusPaymentApproved
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleOrderSent(message amqp.Delivery) {
@@ -75,13 +81,16 @@ func (this *MainApiService) handleOrderSent(message amqp.Delivery) {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
 	order, ok := this.Orders[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusSent
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handlePaymentRefused(message amqp.Delivery) {
@@ -100,13 +109,16 @@ func (this *MainApiService) handlePaymentRefused(message amqp.Delivery) {
 	}
 
 	this.publishEvent(notificationBytes, events.OrderDeletedEvent)
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
 	order, ok := this.Orders[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusPaymentDenied
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleStoreOk(message amqp.Delivery) {
@@ -116,13 +128,16 @@ func (this *MainApiService) handleStoreOk(message amqp.Delivery) {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
 	order, ok := this.Orders[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusStockReserved
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) handleStoreUnavailable(message amqp.Delivery) {
@@ -141,13 +156,36 @@ func (this *MainApiService) handleStoreUnavailable(message amqp.Delivery) {
 	}
 
 	this.publishEvent(notificationBytes, events.OrderDeletedEvent)
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
 	order, ok := this.Orders[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", notification.OrderId)
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
 		return
 	}
 	order.Status = mock.OrderStatusOutOfStock
 	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
+}
+
+func (this *MainApiService) handleCheckoutCreated(message amqp.Delivery) {
+	notification := notifications.PaymentStatus{}
+	err := json.Unmarshal(message.Body, &notification)
+	if err != nil {
+		log.Printf("Failed to decode notification '%v'\n", message.Body)
+		return
+	}
+
+	this.ordersMutex.Lock()
+	defer this.ordersMutex.Unlock()
+	order, ok := this.Orders[notification.OrderId]
+	if !ok {
+		log.Printf("invalid order id '%v'\n", notification.OrderId)
+		return
+	}
+	order.CheckoutUrl = notification.CheckoutUrl
+	this.Orders[notification.OrderId] = order
+	this.broadcastOrder(order)
 }
 
 func (this *MainApiService) sendNotification(object any, event interfaces.Event) {

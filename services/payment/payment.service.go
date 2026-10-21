@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto"
-	"crypto/rand"
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -14,18 +13,23 @@ import (
 	"eCommerce/pkg/notifications"
 	"encoding/json"
 	"log"
-	"math/big"
 	"time"
-
+	"bytes"
+	"io"
+	"net/http"
+	"strings"
+	"eCommerce/pkg/requests"
+	
+	"github.com/gin-gonic/gin"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type PaymentService struct {
 	interfaces.Service
+	httpClient *http.Client
 }
 
 const (
-	ApproveChancePercent       = 50
 	paymentPrivateKeyDirectory = "./services/payment/payment.pem"
 )
 
@@ -66,7 +70,9 @@ func CreatePaymentService() (*PaymentService, error) {
 		payment.CloseRMQChannel()
 		return nil, err
 	}
-
+	payment.httpClient = &http.Client{
+		Timeout: 10 * time.Second,
+	}
 	payment.StartConsuming(payment.HandleMessages)
 
 	return payment, nil
@@ -97,25 +103,90 @@ func (this *PaymentService) handleStoreOk(message amqp.Delivery) {
 	notification := notifications.StoreAvailability{}
 	err := json.Unmarshal(message.Body, &notification)
 	if err != nil {
-		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
-	}
-	value, err := rand.Int(rand.Reader, big.NewInt(100))
-	log.Printf("got rand %v\n", value.Int64())
-	if err != nil {
-		log.Fatalf("Failed to generate a random integer: %v", err)
+		log.Printf("Failed to decode notification '%v': %v\n", string(message.Body), err)
 		return
 	}
-	if value.Int64() < ApproveChancePercent {
+	// 1. Monta o payload de cobrança avisando onde está o nosso Webhook
+	chargeRequest := requests.CreateCobrancaRequest{
+		OrderId:    notification.OrderId,
+		WebhookUrl: "http://" + this.Config.PaymentURL + "/webhook",
+	}
+	requestBytes, err := json.Marshal(chargeRequest)
+	if err != nil {
+		log.Printf("Failed to serialize charge request: %v\n", err)
+		return
+	}
+	// 2. Dispara o POST no Mock de Pagamento para criar a cobrança
+	mockEndpoint := "http://" + this.Config.PaymentMockURL + "/charges"
+	resp, err := this.httpClient.Post(mockEndpoint, "application/json", bytes.NewBuffer(requestBytes))
+	if err != nil {
+		log.Printf("Failed to call payment mock at '%s': %v\n", mockEndpoint, err)
+		return
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read payment mock response: %v\n", err)
+		return
+	}
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		log.Printf("Payment mock returned status %d: %s\n", resp.StatusCode, string(body))
+		return
+	}
+	// 3. Lê a resposta do Mock (que contém a CheckoutUrl)
+	var chargeResponse requests.CreateCobrancaResponse
+	if err := json.Unmarshal(body, &chargeResponse); err != nil {
+		log.Printf("Failed to decode payment mock response: %v\n", err)
+		return
+	}
+	log.Printf("Checkout created for order '%s': %s\n", chargeResponse.OrderId, chargeResponse.CheckoutUrl)
+	// 4. Publica no RabbitMQ avisando que a URL de checkout está pronta para o cliente abrir
+	this.sendNotification(
+		notifications.PaymentStatus{
+			OrderId:     notification.OrderId,
+			CheckoutUrl: chargeResponse.CheckoutUrl,
+		},
+		events.PaymentEventCheckoutCreated,
+	)
+}
+
+func (this *PaymentService) PostWebhook(context *gin.Context) {
+	var request requests.PagamentoWebhookRequest
+	if err := context.BindJSON(&request); err != nil {
+		context.IndentedJSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error": err.Error(),
+		})
+		return
+	}
+	log.Printf("Webhook received for order '%s' with status: %s\n", request.OrderId, request.Status)
+
+	switch strings.ToUpper(strings.TrimSpace(request.Status)) {
+	case "APROVADO":
 		this.sendNotification(
-			notifications.PaymentStatus{OrderId: notification.OrderId},
+			notifications.PaymentStatus{OrderId: request.OrderId},
 			events.PaymentEventApproved,
 		)
-		return
+		context.IndentedJSON(http.StatusOK, gin.H{
+			"success": true,
+			"status":  "APROVADO",
+		})
+	case "RECUSADO":
+		this.sendNotification(
+			notifications.PaymentStatus{OrderId: request.OrderId},
+			events.PaymentEventRefused,
+		)
+		context.IndentedJSON(http.StatusOK, gin.H{
+			"success": true,
+			"status":  "RECUSADO",
+		})
+	
+	default:
+		context.IndentedJSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "status tem que ser APROVADO ou RECUSADO",
+		})
 	}
-	this.sendNotification(
-		notifications.PaymentStatus{OrderId: notification.OrderId},
-		events.PaymentEventRefused,
-	)
 }
 
 func (this *PaymentService) sendNotification(object any, event interfaces.Event) {

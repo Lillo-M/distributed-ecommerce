@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"eCommerce/pkg/dtos"
 	"eCommerce/pkg/events"
 	"eCommerce/pkg/exchanges"
 	"eCommerce/pkg/helpers"
@@ -16,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	gin "github.com/gin-gonic/gin"
@@ -26,10 +28,15 @@ type Store struct {
 	interfaces.Service
 	Products      map[string]mock.Product
 	OrderNotifications map[string]notifications.CreateOrderNotification
+	// protege Products: lido pelo handler do Gin e alterado pela goroutine consumidora do RabbitMQ
+	productsMutex sync.RWMutex
+	// ordem original dos produtos em store.json, mantida ao persistir
+	productsOrder []string
 }
 
 const (
 	storePrivateKeyDirectory = "./services/store/store.pem"
+	storeFilePath            = "store.json"
 )
 
 func CreateStore() (*Store, error) {
@@ -90,14 +97,49 @@ func (this *Store) initProductsMap(products []mock.Product) {
 	this.Products = make(map[string]mock.Product)
 	for _, product := range products {
 		this.Products[product.UUID] = product
+		this.productsOrder = append(this.productsOrder, product.UUID)
+	}
+}
+
+// verifica se há estoque suficiente para TODOS os itens do pedido (chamar com productsMutex travado)
+func (this *Store) hasStock(productsOrdered []dtos.ProductDto) bool {
+	requested := make(map[string]int)
+	for _, productOrdered := range productsOrdered {
+		requested[productOrdered.ProductId] += productOrdered.Quantity
+	}
+
+	for productId, quantity := range requested {
+		storeProduct, ok := this.Products[productId]
+		if !ok {
+			log.Printf("invalid product id '%v'\n", productId)
+			return false
+		}
+		if quantity <= 0 || storeProduct.Quantity < quantity {
+			return false
+		}
+	}
+	return true
+}
+
+// persiste o estado atual do estoque em store.json (chamar com productsMutex travado)
+func (this *Store) saveProducts() {
+	productsList := make([]mock.Product, 0, len(this.productsOrder))
+	for _, productId := range this.productsOrder {
+		productsList = append(productsList, this.Products[productId])
+	}
+
+	if err := mock.SaveProducts(storeFilePath, productsList); err != nil {
+		log.Printf("Failed to persist products in '%v': %v\n", storeFilePath, err)
 	}
 }
 
 func (this *Store) GetProductsStore(context *gin.Context) {
 	var productsList []mock.Product
+	this.productsMutex.RLock()
 	for _, product := range this.Products {
 		productsList = append(productsList, product)
 	}
+	this.productsMutex.RUnlock()
 	context.IndentedJSON(http.StatusOK, productsList)
 }
 
@@ -130,9 +172,21 @@ func (this *Store) handleOrderCreated(message amqp.Delivery) {
 		log.Fatalf("Failed to decode notification '%v'\n", message.Body)
 	}
 
+	this.productsMutex.Lock()
+	defer this.productsMutex.Unlock()
+
 	log.Printf("Received an order of:\n")
 	for _, product := range notification.Products {
 		log.Printf("- %v %v\n", product.Quantity, strconv.Quote(this.Products[product.ProductId].Name))
+	}
+
+	// só dá baixa se houver estoque para todos os itens; caso contrário nada é descontado
+	if !this.hasStock(notification.Products) {
+		this.sendNotification(
+			notifications.StoreAvailability{OrderId: notification.Id},
+			events.StoreUnavailableEvent,
+		)
+		return
 	}
 
 	var outOfStock bool = false
@@ -150,6 +204,8 @@ func (this *Store) handleOrderCreated(message amqp.Delivery) {
 			outOfStock = true
 		}
 	}
+
+	this.saveProducts()
 
 	this.OrderNotifications[notification.Id] = notification
 
@@ -175,18 +231,24 @@ func (this *Store) handleOrderDeleted(message amqp.Delivery) {
 
 	log.Printf("Received an delete notification for the order '%v'\n", notification.OrderId)
 
+	this.productsMutex.Lock()
+	defer this.productsMutex.Unlock()
+
+	// pedidos recusados por falta de estoque não chegam a ser reservados, então não há o que estornar
 	order, ok := this.OrderNotifications[notification.OrderId]
 	if !ok {
-		log.Fatalf("invalid order id '%v'\n", order.Id)
+		log.Printf("invalid order id '%v'\n", order.Id)
 		return
 	}
 
 	for _, product := range order.Products {
 		p := this.Products[product.ProductId]
 		p.Quantity += product.Quantity
+		this.Products[product.ProductId] = p
 	}
 
 	delete(this.OrderNotifications, notification.OrderId)
+	this.saveProducts()
 }
 
 func (this *Store) sendNotification(object any, event interfaces.Event) {

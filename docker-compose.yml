@@ -45,6 +45,19 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  paymentmock:
+    image: golang:alpine
+    container_name: paymentmock
+    ports:
+      - "9000:9000"
+    restart: on-failure
+    volumes:
+      - .:/app
+      - go-modules:/go/pkg/mod
+    working_dir: /app
+    env_file: ".env"
+    command: go run ./services/paymentmock
+
   delivery:
     image: golang:alpine
     container_name: ms-delivery
@@ -104,6 +117,8 @@ services:
   tui:
     image: golang:alpine
     container_name: ms-tui
+    # cliente de terminal do Trab2, substituído pelo frontend web; só sobe com --profile trab2
+    profiles: ["trab2"]
     restart: on-failure
     volumes:
       - .:/app
@@ -134,6 +149,14 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+
+  frontend:
+    image: nginx:alpine
+    container_name: frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
 
 volumes:
   rabbitmq_data:
